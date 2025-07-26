@@ -11,7 +11,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Cliente',
 				'name' => 'cliente_associato',
 				'type' => 'post_object',
-				'post_type' => ['cliente'],
+				'post_type' => ['clienti'],
 				'return_format' => 'id',
 				'ui' => 1,
 			],
