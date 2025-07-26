@@ -2,7 +2,7 @@
 defined('ABSPATH') || exit;
 
 function spm_register_cpt_clienti() {
-	register_post_type('cliente', [
+	register_post_type('clienti', [
 		'labels' => [
 			'name' => 'Clienti',
 			'singular_name' => 'Cliente',

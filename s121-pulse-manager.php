@@ -10,35 +10,44 @@
 defined('ABSPATH') || exit;
 
 //
-// ✅ CARICAMENTO CPT
+// ==========================================================
+// 🔁 CARICAMENTO CPT & ACF
+// ==========================================================
 //
+
 require_once plugin_dir_path(__FILE__) . 'post-types/clienti.php';
 require_once plugin_dir_path(__FILE__) . 'post-types/servizi.php';
 require_once plugin_dir_path(__FILE__) . 'post-types/servizi-clienti.php';
 
-//
-// ✅ CARICAMENTO ACF
-//
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-clienti.php';
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi.php';
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi-clienti.php';
 
 //
-// ✅ REMINDER & FUNZIONI MANUALI
+// ==========================================================
+// ⏰ CRON & FUNZIONALITÀ MANUALI
+// ==========================================================
 //
+
 require_once plugin_dir_path(__FILE__) . 'cron/reminder-rinnovi.php';
 require_once plugin_dir_path(__FILE__) . 'admin/reset-reminder.php';
 require_once plugin_dir_path(__FILE__) . 'admin/rinnovo-manuale.php';
 
 //
-// ✅ INTEGRAZIONE FATTURE IN CLOUD – OAUTH2
+// ==========================================================
+// 📦 FATTURE IN CLOUD: OAUTH & API
+// ==========================================================
 //
-require_once plugin_dir_path(__FILE__) . 'api/oauth.php';
+
+require_once plugin_dir_path(__FILE__) . 'includes/oauth-utils.php';
 require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php';
 
 //
-// 🔁 REGISTRAZIONE EVENTO CRON PER I REMINDER
+// ==========================================================
+// ⚙️ CRON JOB: Reminder rinnovi (giornaliero)
+// ==========================================================
 //
+
 register_activation_hook(__FILE__, function () {
     if (!wp_next_scheduled('spm_check_rinnovi')) {
         wp_schedule_event(time(), 'daily', 'spm_check_rinnovi');
@@ -50,46 +59,163 @@ register_deactivation_hook(__FILE__, function () {
 });
 
 //
-// 🧪 SYNC MANUALE: TRIGGER via URL (?sync_clienti_fic=1)
+// ==========================================================
+// ⏱️ CRON SYNC CLIENTI FIC – ogni notte alle 00:00
+// ==========================================================
 //
+
+register_activation_hook(__FILE__, function () {
+    if (!wp_next_scheduled('spm_sync_clienti_cron')) {
+        wp_schedule_event(strtotime('00:00:00'), 'daily', 'spm_sync_clienti_cron');
+    }
+});
+
+register_deactivation_hook(__FILE__, function () {
+    wp_clear_scheduled_hook('spm_sync_clienti_cron');
+});
+
+add_action('spm_sync_clienti_cron', function () {
+    require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php';
+    sync_clienti_da_fic(false);
+});
+
+
+
+//
+// ==========================================================
+// 🧪 DEBUG: Sync manuale via URL
+// ==========================================================
+//
+
 add_action('admin_init', function () {
-    if (current_user_can('manage_options') && isset($_GET['sync_clienti_fic'])) {
-        $count = spm_scarica_clienti_fattureincloud();
-        add_action('admin_notices', function () use ($count) {
-            if ($count > 0) {
-                echo '<div class="notice notice-success"><p>✔ ' . $count . ' clienti sincronizzati da Fatture in Cloud.</p></div>';
-            } else {
-                echo '<div class="notice notice-warning"><p>⚠ Nessun cliente ricevuto o errore nella chiamata API.</p></div>';
-            }
-        });
+    if (isset($_GET['spm_test_sync']) && current_user_can('manage_options')) {
+        sync_clienti_da_fic(true); // Debug visivo
+        exit;
+    }
+
+    if (isset($_GET['spm_test_visualizza']) && current_user_can('manage_options')) {
+        debug_visualizza_clienti_fic();
+        exit;
     }
 });
 
 //
-// 🔐 CALLBACK OAUTH2: admin.php?page=spm-oauth-callback
+// ==========================================================
+// 🧩 ADMIN MENU: Voce principale e pagina impostazioni
+// ==========================================================
 //
-add_action('admin_menu', function () {
-    add_submenu_page(null, 'Callback OAuth', 'Callback OAuth', 'manage_options', 'spm-oauth-callback', 'spm_oauth_callback_page');
-});
 
-function spm_oauth_callback_page() {
-    require_once plugin_dir_path(__FILE__) . 'api/oauth.php';
+add_action('admin_menu', 'spm_add_admin_menu');
 
-    echo '<h2>S121 Pulse Manager – Autenticazione con Fatture in Cloud</h2>';
+function spm_add_admin_menu() {
+    add_menu_page(
+        'S121 Pulse Manager',
+        'Pulse Manager',
+        'manage_options',
+        's121-pulse-manager',
+        'spm_render_dashboard_page',
+        'dashicons-chart-pie',
+        3
+    );
 
-    if (!isset($_GET['code'])) {
-        echo '<p style="color:red;">❌ Nessun codice ricevuto.</p>';
-        return;
-    }
+    add_submenu_page(
+        's121-pulse-manager',
+        'Impostazioni',
+        'Impostazioni',
+        'manage_options',
+        's121-impostazioni',
+        'spm_render_impostazioni_page'
+    );
+}
 
-    $code = sanitize_text_field($_GET['code']);
-    $res = spm_scambia_code_con_token($code);
+//
+// ==========================================================
+// 📊 DASHBOARD PRINCIPALE
+// ==========================================================
+//
 
-    if (isset($res['success'])) {
-        echo '<p style="color:green;">✅ Token salvato con successo!</p>';
-        echo '<pre>' . print_r($res['data'], true) . '</pre>';
+function spm_render_dashboard_page() {
+    $last_sync_time = get_option('spm_last_sync_timestamp');
+    $last_sync_method = get_option('spm_last_sync_method');
+
+    echo '<div class="wrap" style="font-family: system-ui, sans-serif; max-width: 1100px; margin-top: 20px;">';
+
+    echo '<h1 style="font-size: 2rem; margin-bottom: 0.5em;">🚀 S121 Pulse Manager</h1>';
+    echo '<p style="font-size: 1rem; line-height: 1.5;">Benvenuto nel pannello di controllo del plugin <strong>S121 Pulse Manager</strong>, sviluppato da Studio 121 per la gestione ricorrente di servizi, clienti, reminder e integrazione con <em>Fatture in Cloud</em>.</p>';
+
+    // 🔄 Ultima sincronizzazione
+    echo '<div style="margin-top:1em; padding:1em; background:#f1f1f1; border-left: 5px solid #2271b1; border-radius: 4px;">';
+    echo '<strong>🕒 Ultima sincronizzazione clienti:</strong><br>';
+    if ($last_sync_time) {
+        echo '📅 ' . esc_html($last_sync_time) . ' via <strong>' . esc_html($last_sync_method) . '</strong>';
     } else {
-        echo '<p style="color:red;">❌ Errore durante autenticazione:</p>';
-        echo '<pre>' . print_r($res, true) . '</pre>';
+        echo '⚠️ Nessuna sincronizzazione effettuata finora.';
     }
+    echo '</div>';
+
+    echo '<hr style="margin: 2em 0;">';
+
+    echo '<div style="display: flex; flex-wrap: wrap; gap: 1.5rem;">';
+
+    // CLIENTI
+    echo '<div style="flex:1; min-width:250px; background:#f9f9f9; border-left: 4px solid #2271b1; padding:1.2em; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <h2 style="margin-top:0;">👤 Clienti</h2>
+        <p>Visualizza, sincronizza e aggiorna l\'anagrafica clienti da Fatture in Cloud. I clienti sono archiviati come <code>CPT</code> personalizzato.</p>
+    </div>';
+
+    // SERVIZI
+    echo '<div style="flex:1; min-width:250px; background:#f9f9f9; border-left: 4px solid #00a32a; padding:1.2em; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <h2 style="margin-top:0;">🛠️ Servizi</h2>
+        <p>Gestisci i tuoi servizi ricorrenti, associa ogni servizio a clienti e specifica costi, durata e frequenza di rinnovo.</p>
+    </div>';
+
+    // SITUAZIONE
+    echo '<div style="flex:1; min-width:250px; background:#f9f9f9; border-left: 4px solid #dba617; padding:1.2em; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <h2 style="margin-top:0;">📅 Situazione</h2>
+        <p>Consulta lo stato attuale dei rinnovi, dei reminder inviati e delle prossime azioni da eseguire.</p>
+    </div>';
+
+    // FATTURE IN CLOUD
+    echo '<div style="flex:1; min-width:250px; background:#f9f9f9; border-left: 4px solid #ee4c7c; padding:1.2em; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <h2 style="margin-top:0;">🔗 Integrazione FIC</h2>
+        <p>OAuth2 attivo per accedere ai clienti. Puoi avviare la sincronizzazione manuale o attivare quella automatica (CRON ogni notte).</p>
+    </div>';
+
+    echo '</div>';
+
+    // CTA
+    echo '<hr style="margin: 2em 0;">';
+    echo '<div style="padding:1em 0;">';
+    echo '<a href="' . esc_url(admin_url('admin.php?spm_test_sync=1')) . '" class="button button-primary button-hero" style="font-size:1.1em;">🔄 Avvia sincronizzazione clienti FIC</a>';
+    echo '<p style="margin-top:1em; color: #666;">Questa operazione recupera tutti i clienti da Fatture in Cloud e li salva come post nel CPT <code>clienti</code>. Se già presenti, non verranno duplicati.</p>';
+    echo '</div>';
+
+    echo '<hr style="margin: 2em 0;">';
+    echo '<p style="font-size:0.9em; color: #999;">🧩 Plugin realizzato da <strong>Studio 121</strong> – versione 1.0.0</p>';
+    echo '</div>';
+}
+
+
+//
+// ==========================================================
+// ⚙️ PAGINA IMPOSTAZIONI
+// ==========================================================
+//
+
+function spm_render_impostazioni_page() {
+    echo '<div class="wrap">';
+    echo '<h1>⚙️ Impostazioni</h1>';
+    echo '<p>Puoi avviare la sincronizzazione manuale dei clienti da Fatture in Cloud.</p>';
+
+    echo '<form method="post">';
+    submit_button('🔁 Avvia Sincronizzazione Clienti');
+    echo '</form>';
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && current_user_can('manage_options')) {
+        echo '<hr>';
+        sync_clienti_da_fic(true); // debug visivo
+        exit;
+    }
+
+    echo '</div>';
 }

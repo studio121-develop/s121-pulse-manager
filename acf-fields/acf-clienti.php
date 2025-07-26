@@ -42,7 +42,7 @@ if (function_exists('acf_add_local_field_group')) {
 			],
 		],
 		'location' => [[
-			['param' => 'post_type', 'operator' => '==', 'value' => 'cliente']
+			['param' => 'post_type', 'operator' => '==', 'value' => 'clienti']
 		]]
 	]);
 }
