@@ -21,7 +21,25 @@ require_once plugin_dir_path(__FILE__) . 'post-types/servizi-clienti.php';
 
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-clienti.php';
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi.php';
-require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi-clienti.php';
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi-clienti-v2.php';
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-default-values.php';
+
+require_once plugin_dir_path(__FILE__) . 'includes/ajax-handlers.php';
+require_once plugin_dir_path(__FILE__) . 'includes/enqueue-script.php';
+require_once plugin_dir_path(__FILE__) . 'includes/rinnovo-contratto.php';
+require_once plugin_dir_path(__FILE__) . 'includes/admin-ui.php';
+
+require_once plugin_dir_path(__FILE__) . 'includes/azioni-contratto.php';
+
+
+
+require_once plugin_dir_path(__FILE__) . 'includes/log-eventi-metabox.php';
+require_once plugin_dir_path(__FILE__) . 'includes/log-utils.php';
+
+
+
+
+
 
 //
 // ==========================================================
@@ -219,3 +237,10 @@ function spm_render_impostazioni_page() {
 
     echo '</div>';
 }
+
+
+add_action('init', function(){
+  if (is_admin() && isset($_GET['test_log_evento'])) {
+    spm_log_evento(495, 'rinnovo', 'Test di inserimento log da init');
+  }
+});

@@ -2,7 +2,7 @@
 defined('ABSPATH') || exit;
 
 function spm_register_cpt_servizi_clienti() {
-	register_post_type('servizio_cliente', [
+	register_post_type('servizi_cliente', [
 		'labels' => [
 			'name' => 'Servizi Clienti',
 			'singular_name' => 'Servizio Cliente',
@@ -19,7 +19,7 @@ function spm_register_cpt_servizi_clienti() {
 		'show_in_menu' => true,
 		'menu_position' => 22,
 		'menu_icon' => 'dashicons-update',
-		'supports' => ['title'],
+		'supports' => ['custom-fields'],
 		'capability_type' => 'post',
 		'has_archive' => false,
 	]);

@@ -2,7 +2,7 @@
 defined('ABSPATH') || exit;
 
 function spm_register_cpt_servizi() {
-	register_post_type('servizio', [
+	register_post_type('servizi', [
 		'labels' => [
 			'name' => 'Servizi',
 			'singular_name' => 'Servizio',
@@ -19,7 +19,7 @@ function spm_register_cpt_servizi() {
 		'show_in_menu' => true,
 		'menu_position' => 21,
 		'menu_icon' => 'dashicons-portfolio',
-		'supports' => ['title', 'editor'],
+		'supports' => ['title'],
 		'capability_type' => 'post',
 		'has_archive' => false,
 	]);

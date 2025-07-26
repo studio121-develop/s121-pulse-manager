@@ -1,131 +1,97 @@
 <?php
+
 defined('ABSPATH') || exit;
 
 if (function_exists('acf_add_local_field_group')) {
 	acf_add_local_field_group([
-		'key' => 'group_servizio_cliente',
-		'title' => 'Assegnazione Servizio al Cliente',
+		'key' => 'group_spm_servizi_clienti',
+		'title' => 'Assegnazione Servizio a Cliente',
 		'fields' => [
+
 			[
-				'key' => 'field_cliente_associato',
+				'key' => 'field_spm_cliente',
 				'label' => 'Cliente',
-				'name' => 'cliente_associato',
+				'name' => 'cliente',
 				'type' => 'post_object',
 				'post_type' => ['clienti'],
-				'return_format' => 'id',
+				'required' => 1,
 				'ui' => 1,
 			],
+
 			[
-				'key' => 'field_servizio_associato',
+				'key' => 'field_spm_servizio',
 				'label' => 'Servizio',
-				'name' => 'servizio_associato',
+				'name' => 'servizio',
 				'type' => 'post_object',
-				'post_type' => ['servizio'],
-				'return_format' => 'id',
+				'post_type' => ['servizi'],
+				'required' => 1,
 				'ui' => 1,
 			],
+
 			[
-				'key' => 'field_prezzo_personalizzato',
+				'key' => 'field_spm_prezzo_personalizzato',
 				'label' => 'Prezzo Personalizzato (€)',
 				'name' => 'prezzo_personalizzato',
 				'type' => 'number',
 				'prepend' => '€',
 				'min' => 0,
 				'step' => 0.01,
+				'instructions' => 'Se vuoto, verrà usato il prezzo del servizio',
 			],
+
 			[
-				'key' => 'field_frequenza',
-				'label' => 'Frequenza',
-				'name' => 'frequenza',
+				'key' => 'field_spm_ricorrenza_custom',
+				'label' => 'Ricorrenza Personalizzata',
+				'name' => 'ricorrenza_personalizzata',
 				'type' => 'select',
 				'choices' => [
-					'1m' => 'Mensile',
-					'3m' => 'Trimestrale',
-					'6m' => 'Semestrale',
-					'12m' => 'Annuale',
+					'mensile' => 'Mensile',
+					'trimestrale' => 'Trimestrale',
+					'semestrale' => 'Semestrale',
+					'annuale' => 'Annuale',
 				],
 				'ui' => 1,
+				'instructions' => 'Se vuoto, verrà usata la ricorrenza del servizio',
 			],
+
 			[
-				'key' => 'field_data_attivazione',
-				'label' => 'Data Attivazione',
-				'name' => 'data_attivazione',
+				'key' => 'field_spm_data_inizio',
+				'label' => 'Data Inizio',
+				'name' => 'data_inizio',
+				'type' => 'date_picker',
+				'required' => 1,
+				'display_format' => 'd/m/Y',
+			],
+
+			[
+				'key' => 'field_spm_data_scadenza',
+				'label' => 'Data Scadenza',
+				'name' => 'data_scadenza',
 				'type' => 'date_picker',
 				'display_format' => 'd/m/Y',
-				'return_format' => 'Y-m-d',
+				'instructions' => 'Se lasciata vuota, verrà calcolata automaticamente',
 			],
+
 			[
-				'key' => 'field_data_prossimo_rinnovo',
-				'label' => 'Data Prossimo Rinnovo',
-				'name' => 'data_prossimo_rinnovo',
-				'type' => 'date_picker',
-				'display_format' => 'd/m/Y',
-				'return_format' => 'Y-m-d',
-			],
-			[
-				'key' => 'field_stato_servizio',
-				'label' => 'Stato',
-				'name' => 'stato_servizio',
-				'type' => 'select',
-				'choices' => [
-					'attivo' => 'Attivo',
-					'sospeso' => 'Sospeso',
-					'scaduto' => 'Scaduto',
-					'cancellato' => 'Cancellato',
-				],
-				'ui' => 1,
-			],
-			[
-				'key' => 'field_invia_reminder',
-				'label' => 'Attiva Reminder Automatici',
-				'name' => 'invia_reminder',
+				'key' => 'field_spm_reminder_off',
+				'label' => 'Disattiva Reminder Email',
+				'name' => 'reminder_disattivato',
 				'type' => 'true_false',
 				'ui' => 1,
-				'default_value' => 1,
 			],
+
 			[
-				'key' => 'field_reminder_personalizzati',
-				'label' => 'Reminder Personalizzati',
-				'name' => 'reminder_personalizzati',
-				'type' => 'repeater',
-				'button_label' => 'Aggiungi Reminder',
-				'layout' => 'table',
-				'sub_fields' => [
-					[
-						'key' => 'field_giorni_anticipo',
-						'label' => 'Giorni Prima della Scadenza',
-						'name' => 'giorni_anticipo',
-						'type' => 'number',
-						'min' => 1,
-						'instructions' => 'Es. 30 = invio 30 giorni prima della data di rinnovo',
-					],
-					[
-						'key' => 'field_testo_reminder',
-						'label' => 'Messaggio Email (opzionale)',
-						'name' => 'testo_reminder',
-						'type' => 'textarea',
-						'rows' => 3,
-					],
-					[
-						'key' => 'field_inviato',
-						'label' => 'Inviato',
-						'name' => 'inviato',
-						'type' => 'true_false',
-						'ui' => 1,
-						'default_value' => 0,
-					],
-				],
-			],
-			[
-				'key' => 'field_note_cliente_servizio',
-				'label' => 'Note per questo Cliente',
-				'name' => 'note_cliente_servizio',
+				'key' => 'field_spm_note',
+				'label' => 'Note Interne',
+				'name' => 'note_interne',
 				'type' => 'textarea',
 				'rows' => 3,
 			],
 		],
 		'location' => [[
-			['param' => 'post_type', 'operator' => '==', 'value' => 'servizio_cliente']
-		]]
+			['param' => 'post_type', 'operator' => '==', 'value' => 'servizi_cliente']
+		]],
+		'position' => 'normal',
+		'style' => 'default',
 	]);
 }
