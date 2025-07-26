@@ -1,0 +1,5 @@
+{
+    "require": {
+        "fattureincloud/fattureincloud-php-sdk": "^2.1"
+    }
+}

@@ -1,0 +1,4 @@
+[26-Jul-2025 11:02:10 UTC] PHP Fatal error:  Uncaught Error: Undefined constant FattureInCloud\OAuth2\Scope::USER_ME in /home/studioit/dev.studio121.it/121tools/wp-content/plugins/s121-pulse-manager/oauth.php:31
+Stack trace:
+#0 {main}
+  thrown in /home/studioit/dev.studio121.it/121tools/wp-content/plugins/s121-pulse-manager/oauth.php on line 31
