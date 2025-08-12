@@ -15,14 +15,14 @@ defined('ABSPATH') || exit;
 // ==========================================================
 //
 
-require_once plugin_dir_path(__FILE__) . 'post-types/clienti.php';
-require_once plugin_dir_path(__FILE__) . 'post-types/servizi.php';
-require_once plugin_dir_path(__FILE__) . 'post-types/servizi-clienti.php';
+require_once plugin_dir_path(__FILE__) . 'post-types/clienti.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'post-types/servizi.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'post-types/servizi-clienti.php'; // ok
 
-require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-clienti.php';
-require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi.php';
-require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi-clienti-v2.php';
-require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-default-values.php';
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-clienti.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi-clienti.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-default-values.php'; // ok
 
 require_once plugin_dir_path(__FILE__) . 'includes/ajax-handlers.php';
 require_once plugin_dir_path(__FILE__) . 'includes/enqueue-script.php';
@@ -57,8 +57,9 @@ require_once plugin_dir_path(__FILE__) . 'admin/rinnovo-manuale.php';
 // ==========================================================
 //
 
-require_once plugin_dir_path(__FILE__) . 'includes/oauth-utils.php';
-require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php';
+require_once plugin_dir_path(__FILE__) . 'includes/oauth-utils.php'; // ok, anche oauth.php nella root del plugin
+require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php'; // ok
+
 
 //
 // ==========================================================
