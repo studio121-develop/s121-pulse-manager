@@ -17,11 +17,11 @@ defined('ABSPATH') || exit;
 
 require_once plugin_dir_path(__FILE__) . 'post-types/clienti.php'; // ok
 require_once plugin_dir_path(__FILE__) . 'post-types/servizi.php'; // ok
-require_once plugin_dir_path(__FILE__) . 'post-types/servizi-clienti.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'post-types/contratti.php'; // ok
 
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-clienti.php'; // ok
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi.php'; // ok
-require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-servizi-clienti.php'; // ok
+require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-contratti.php'; // ok
 require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-default-values.php'; // ok
 
 require_once plugin_dir_path(__FILE__) . 'includes/ajax-handlers.php';
