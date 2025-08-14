@@ -94,14 +94,6 @@ if (function_exists('acf_add_local_field_group')) {
 				'wrapper' => ['width' => '34'],
 			],
 			
-			// === SEZIONE DATE ===
-			[
-				'key' => 'field_spm_contratto_tab_date',
-				'label' => 'Date',
-				'type' => 'tab',
-				'placement' => 'left',
-			],
-			
 			// Data attivazione (inizio contratto)
 			[
 				'key' => 'field_spm_contratto_data_attivazione',
@@ -128,6 +120,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'first_day' => 1,
 				'wrapper' => ['width' => '50'],
 			],
+
 			
 			// === SEZIONE OPZIONI ===
 			[

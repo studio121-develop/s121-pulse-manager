@@ -24,11 +24,14 @@ require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-contratti.php';  // NUO
 // ==========================================================
 require_once plugin_dir_path(__FILE__) . 'includes/class-date-helper.php';  // NUOVO
 require_once plugin_dir_path(__FILE__) . 'includes/class-contract-handler.php';  // NUOVO
+require_once plugin_dir_path(__FILE__) . 'includes/spm-list-inline-actions.php';
+
 
 // ==========================================================
 // ADMIN
 // ==========================================================
 require_once plugin_dir_path(__FILE__) . 'admin/dashboard-contratti.php';  // NUOVO
+
 
 // ==========================================================
 // FATTURE IN CLOUD

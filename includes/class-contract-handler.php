@@ -130,7 +130,8 @@ class SPM_Contract_Handler {
 			$cliente_nome = get_the_title($cliente_id);
 			$servizio_nome = get_the_title($servizio_id);
 			
-			$title = sprintf('#%d - %s - %s', $post_id, $cliente_nome, $servizio_nome);
+			$title = sprintf('#%d - %s - %s', $post_id, $cliente_nome, $servizio_nome); //obsoleto
+			$title = sprintf('#%d', $post_id);
 			
 			// Evita loop infinito
 			remove_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
