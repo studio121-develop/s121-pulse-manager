@@ -65,7 +65,8 @@ class SPM_Contract_Handler {
 		add_action('manage_contratti_posts_custom_column', [__CLASS__, 'render_admin_columns'], 10, 2);
 		
 		// Metabox azioni
-		add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
+		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
+		add_action('add_meta_boxes_contratti', [__CLASS__, 'add_action_metabox']);
 		
 		// Script admin
 		add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_admin_scripts']);
@@ -666,26 +667,12 @@ class SPM_Contract_Handler {
 				
 			case 'stato':
 				$stato = get_field('stato', $post_id);
-				$stato_key = $stato ?: 'indefinito'; // fallback
-				$colors = [
-					'attivo' => 'green',
-					'sospeso' => 'orange',
-					'scaduto' => 'red',
-					'cessato' => 'gray'
-				];
-				$emoji = [
-					'attivo' => '🟢',
-					'sospeso' => '🟡',
-					'scaduto' => '🔴',
-					'cessato' => '⚫'
-				];
-				$color = $colors[$stato] ?? 'gray';
-				$icon = $emoji[$stato] ?? '';
-				// Label sicura: se $stato è null, mostra "—"
-				$label = ($stato !== null && $stato !== '') 
-					? ucfirst((string)$stato) 
-					: '—';
-				echo '<span style="color:' . $color . '">' . $icon . ' ' . ucfirst($stato) . '</span>';
+				$colors = ['attivo'=>'green','sospeso'=>'orange','scaduto'=>'red','cessato'=>'gray'];
+				$emoji  = ['attivo'=>'🟢','sospeso'=>'🟡','scaduto'=>'🔴','cessato'=>'⚫'];
+				$color  = $colors[$stato] ?? 'gray';
+				$icon   = $emoji[$stato] ?? '';
+				$label  = ($stato !== null && $stato !== '') ? ucfirst((string)$stato) : '—';
+				echo '<span style="color:' . esc_attr($color) . '">' . $icon . ' ' . esc_html($label) . '</span>';
 				break;
 				
 			case 'azioni':
@@ -720,18 +707,33 @@ class SPM_Contract_Handler {
 	/**
 	 * METABOX AZIONI
 	 */
-	public static function add_action_metabox() {
-		add_meta_box(
-			'spm_contract_actions',
-			'⚡ Azioni Rapide',
-			[__CLASS__, 'render_action_metabox'],
-			'contratti',
-			'side',
-			'high'
-		);
-	}
+
+	 // Cambia la firma per ricevere $post
+	 public static function add_action_metabox($post) {
+		 $status = get_post_status($post);
+		 if (!$post || !$post->ID || in_array($status, ['auto-draft','draft'])) {
+			 return; // non aggiungere la metabox in creazione
+		 }
+	 
+		 add_meta_box(
+			 'spm_contract_actions',
+			 '⚡ Azioni Rapide',
+			 [__CLASS__, 'render_action_metabox'],
+			 'contratti',
+			 'side',
+			 'high'
+		 );
+	 }
 	
 	public static function render_action_metabox($post) {
+		
+		$status = get_post_status($post);
+		if (!$post || !$post->ID || in_array($status, ['auto-draft','draft'])) {
+			echo '<div style="background:#f9f9f9;padding:10px;border-left:4px solid #777;">
+					Salva il contratto per abilitare le azioni.
+				  </div>';
+			return;
+		}
 		$stato     = get_field('stato', $post->ID);
 		$scadenza  = get_field('data_prossima_scadenza', $post->ID);
 		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : 999;
@@ -825,13 +827,19 @@ class SPM_Contract_Handler {
 	 * HANDLE AJAX
 	 */
 	public static function handle_ajax_action() {
+		
 		check_ajax_referer('spm_contract_action', '_wpnonce');
 		
 		$post_id = intval($_POST['post_id']);
-		$action = sanitize_text_field($_POST['contract_action']);
+		$action  = sanitize_text_field($_POST['contract_action']);
 		
 		if (!current_user_can('edit_post', $post_id)) {
 			wp_send_json_error(['message' => 'Non autorizzato']);
+		}
+		
+		$status = get_post_status($post_id);
+		if (in_array($status, ['auto-draft','draft'])) {
+			wp_send_json_error(['message' => 'Contratto non ancora inizializzato. Salva prima.']);
 		}
 		
 		$result = false;
