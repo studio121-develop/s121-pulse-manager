@@ -2,8 +2,12 @@
 defined('ABSPATH') || exit;
 
 /**
- * Campi ACF per CPT Contratti - Versione Semplificata
- * Elimina ridondanze e semplifica la gestione
+ * Campi ACF per CPT Contratti - Versione Migliorata
+ * 
+ * Migliorie implementate:
+ * 1. Data scadenza readonly (calcolata automaticamente)
+ * 2. Storico completo (non solo rinnovi)
+ * 3. Precompilazione da servizio selezionato
  */
 
 if (function_exists('acf_add_local_field_group')) {
@@ -44,6 +48,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'ui' => 1,
 				'return_format' => 'id',
 				'wrapper' => ['width' => '50'],
+				'instructions' => 'La selezione precompilerà automaticamente prezzo, frequenza e note',
 			],
 			
 			// Prezzo contratto (override del servizio)
@@ -52,7 +57,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Prezzo Contratto',
 				'name' => 'prezzo_contratto',
 				'type' => 'number',
-				'instructions' => 'Lascia vuoto per usare il prezzo base del servizio',
+				'instructions' => 'Precompilato dal servizio. Modifica per personalizzare.',
 				'prepend' => '€',
 				'step' => 0.01,
 				'min' => 0,
@@ -75,6 +80,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'required' => 1,
 				'ui' => 1,
 				'wrapper' => ['width' => '33'],
+				'instructions' => '',
 			],
 			
 			// Stato contratto
@@ -100,7 +106,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Data Attivazione',
 				'name' => 'data_attivazione',
 				'type' => 'date_picker',
-				'instructions' => 'Data di inizio del contratto',
+				'instructions' => 'Data di inizio contratto',
 				'display_format' => 'd/m/Y',
 				'return_format' => 'Y-m-d',
 				'first_day' => 1,
@@ -108,16 +114,18 @@ if (function_exists('acf_add_local_field_group')) {
 				'wrapper' => ['width' => '50'],
 			],
 			
-			// Data prossima scadenza (calcolata automaticamente)
+			// Data prossima scadenza (READONLY - calcolata automaticamente)
 			[
 				'key' => 'field_spm_contratto_data_scadenza',
 				'label' => 'Prossima Scadenza',
 				'name' => 'data_prossima_scadenza',
 				'type' => 'date_picker',
-				'instructions' => 'Calcolata automaticamente se lasciata vuota',
+				'instructions' => 'Data fine Contratto',
 				'display_format' => 'd/m/Y',
 				'return_format' => 'Y-m-d',
 				'first_day' => 1,
+				'readonly' => 1,
+				'disabled' => 1,
 				'wrapper' => ['width' => '50'],
 			],
 
@@ -136,7 +144,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Rinnovo Automatico',
 				'name' => 'rinnovo_automatico',
 				'type' => 'true_false',
-				'instructions' => 'Se attivo, il contratto si rinnova automaticamente alla scadenza',
+				'instructions' => '',
 				'ui' => 1,
 				'default_value' => 0,
 				'wrapper' => ['width' => '50'],
@@ -148,7 +156,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Giorni Preavviso',
 				'name' => 'giorni_preavviso',
 				'type' => 'number',
-				'instructions' => 'Giorni di anticipo per inviare reminder',
+				'instructions' => '',
 				'default_value' => 30,
 				'min' => 1,
 				'max' => 90,
@@ -163,7 +171,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Note Interne',
 				'name' => 'note_interne',
 				'type' => 'textarea',
-				'instructions' => 'Note visibili solo internamente',
+				'instructions' => 'Note visibili solo internamente)',
 				'rows' => 3,
 			],
 			
@@ -175,24 +183,55 @@ if (function_exists('acf_add_local_field_group')) {
 				'placement' => 'left',
 			],
 			
-			// Storico rinnovi (semplificato)
+			// Storico completo (rinominato da "storico_rinnovi")
 			[
 				'key' => 'field_spm_contratto_storico',
-				'label' => 'Storico Rinnovi',
-				'name' => 'storico_rinnovi',
+				'label' => 'Storico Contratto',
+				'name' => 'storico_contratto',
 				'type' => 'repeater',
-				'instructions' => 'Registro automatico dei rinnovi effettuati',
+				'instructions' => 'Log completo di tutte le operazioni sul contratto (creazione, rinnovi, sospensioni, ecc.)',
 				'layout' => 'table',
-				'button_label' => 'Aggiungi Rinnovo',
+				'button_label' => 'Aggiungi Voce',
+				'readonly' => 1, // Solo lettura - gestito dal sistema
 				'sub_fields' => [
 					[
 						'key' => 'field_spm_storico_data',
 						'label' => 'Data',
-						'name' => 'data_rinnovo',
+						'name' => 'data_operazione',
 						'type' => 'date_picker',
 						'display_format' => 'd/m/Y',
 						'return_format' => 'Y-m-d',
-						'wrapper' => ['width' => '25'],
+						'wrapper' => ['width' => '15'],
+						'readonly' => 1,
+					],
+					[
+						'key' => 'field_spm_storico_ora',
+						'label' => 'Ora',
+						'name' => 'ora_operazione',
+						'type' => 'time_picker',
+						'display_format' => 'H:i',
+						'return_format' => 'H:i',
+						'wrapper' => ['width' => '10'],
+						'readonly' => 1,
+					],
+					[
+						'key' => 'field_spm_storico_tipo',
+						'label' => 'Operazione',
+						'name' => 'tipo_operazione',
+						'type' => 'select',
+						'choices' => [
+							'creazione' => '🆕 Creazione',
+							'attivazione' => '✅ Attivazione',
+							'rinnovo_automatico' => '🔄 Rinnovo Automatico',
+							'rinnovo_manuale' => '🔄 Rinnovo Manuale',
+							'sospensione' => '⏸️ Sospensione',
+							'riattivazione' => '▶️ Riattivazione',
+							'cessazione' => '⛔ Cessazione',
+							'modifica' => '✏️ Modifica',
+							'scadenza' => '⏰ Scadenza',
+						],
+						'wrapper' => ['width' => '20'],
+						'readonly' => 1,
 					],
 					[
 						'key' => 'field_spm_storico_importo',
@@ -200,27 +239,41 @@ if (function_exists('acf_add_local_field_group')) {
 						'name' => 'importo',
 						'type' => 'number',
 						'prepend' => '€',
-						'wrapper' => ['width' => '25'],
+						'wrapper' => ['width' => '15'],
+						'readonly' => 1,
 					],
 					[
-						'key' => 'field_spm_storico_tipo',
-						'label' => 'Tipo',
-						'name' => 'tipo',
-						'type' => 'select',
-						'choices' => [
-							'automatico' => 'Automatico',
-							'manuale' => 'Manuale',
-						],
-						'wrapper' => ['width' => '20'],
+						'key' => 'field_spm_storico_utente',
+						'label' => 'Utente',
+						'name' => 'utente',
+						'type' => 'text',
+						'wrapper' => ['width' => '15'],
+						'readonly' => 1,
 					],
 					[
 						'key' => 'field_spm_storico_note',
 						'label' => 'Note',
 						'name' => 'note',
 						'type' => 'text',
-						'wrapper' => ['width' => '30'],
+						'wrapper' => ['width' => '25'],
+						'readonly' => 1,
 					],
 				],
+			],
+			
+			// Anteprima calcolo scadenza
+			[
+				'key' => 'field_spm_contratto_preview',
+				'label' => 'Anteprima Calcolo Scadenza',
+				'name' => 'preview_scadenza',
+				'type' => 'message',
+				'message' => '<div id="spm-scadenza-preview" style="padding: 15px; background: #f0f8ff; border-left: 4px solid #0073aa; margin: 10px 0;">
+					<strong>Calcolo Automatico:</strong><br>
+					Data Attivazione: <span id="preview-attivazione">—</span><br>
+					Frequenza: <span id="preview-frequenza">—</span><br>
+					<strong>Prossima Scadenza: <span id="preview-scadenza" style="color: #0073aa;">—</span></strong>
+				</div>',
+				'new_lines' => '',
 			],
 		],
 		'location' => [[

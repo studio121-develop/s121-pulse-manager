@@ -71,6 +71,8 @@ add_action('admin_init', function () {
     }
 });
 
+
+
 // Menu principale plugin
 add_action('admin_menu', function() {
     add_menu_page(

@@ -1,19 +1,16 @@
 <?php
 /**
- * Contract Handler - Gestione Migliorata Contratti
+ * Contract Handler - Gestione semplificata contratti
  * 
- * Migliorie implementate:
- * 1. Data scadenza sempre calcolata automaticamente
- * 2. Storico completo di tutte le operazioni
- * 3. Log dettagliato con data/ora/utente
- * 4. Precompilazione automatica da servizio
+ * Logica principale:
+ * 1. Al salvataggio: calcola automaticamente la scadenza
+ * 2. Ogni giorno: controlla scadenze e invia reminder
+ * 3. Azioni manuali: rinnova, sospendi, riattiva
  */
 
 defined('ABSPATH') || exit;
 
 class SPM_Contract_Handler {
-	
-	private static $is_saving = false; // Previeni loop infiniti
 	
 	/**
 	 * Inizializza la classe
@@ -21,9 +18,6 @@ class SPM_Contract_Handler {
 	public static function init() {
 		// Hook salvataggio contratto
 		add_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
-		
-		// AJAX per recupero dati servizio
-		add_action('wp_ajax_spm_get_servizio_defaults', [__CLASS__, 'ajax_get_servizio_defaults']);
 		
 		// Cron giornaliero
 		add_action('spm_daily_check', [__CLASS__, 'daily_check']);
@@ -34,12 +28,17 @@ class SPM_Contract_Handler {
 		// Colonne admin
 		add_filter('manage_contratti_posts_columns', [__CLASS__, 'add_admin_columns']);
 		add_action('manage_contratti_posts_custom_column', [__CLASS__, 'render_admin_columns'], 10, 2);
-		
+
 		// Metabox azioni
 		add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
-		
-		// Script admin
-		add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_admin_scripts']);
+
+		// (Punto 2) Solo in admin: filtro UI, ordinamento e meta-rank per "frequenza"
+		if (is_admin()) {
+			add_filter('manage_edit-contratti_sortable_columns', [__CLASS__, 'sortable_tipo']);
+			add_action('restrict_manage_posts', [__CLASS__, 'filter_tipo_ui']);
+			add_action('pre_get_posts', [__CLASS__, 'apply_tipo_order_and_filter']);
+			add_action('save_post_contratti', [__CLASS__, 'save_freq_rank'], 10, 3);
+		}
 		
 		// Schedula cron se non esiste
 		if (!wp_next_scheduled('spm_daily_check')) {
@@ -48,85 +47,24 @@ class SPM_Contract_Handler {
 	}
 	
 	/**
-	 * Enqueue script admin
-	 */
-	public static function enqueue_admin_scripts($hook) {
-		global $post_type;
-		
-		if ($post_type === 'contratti') {
-			wp_enqueue_script(
-				'spm-acf-dynamic',
-				plugin_dir_url(__FILE__) . '../assets/js/acf-dynamic-values.js',
-				['jquery', 'acf'],
-				'2.0.0',
-				true
-			);
-		}
-	}
-	
-	/**
-	 * AJAX: Recupera defaults dal servizio selezionato
-	 */
-	public static function ajax_get_servizio_defaults() {
-		// Verifica nonce e permessi
-		if (!current_user_can('edit_posts')) {
-			wp_send_json_error(['message' => 'Non autorizzato']);
-		}
-		
-		$servizio_id = intval($_POST['servizio_id'] ?? 0);
-		if (!$servizio_id) {
-			wp_send_json_error(['message' => 'ID servizio non valido']);
-		}
-		
-		// Recupera dati servizio
-		$data = [
-			'prezzo_base' => get_field('prezzo_base', $servizio_id),
-			'frequenza_ricorrenza' => get_field('frequenza_ricorrenza', $servizio_id),
-			'giorni_pre_reminder' => get_field('giorni_pre_reminder', $servizio_id),
-			'descrizione_admin' => get_field('descrizione_admin', $servizio_id),
-		];
-		
-		// Filtra valori nulli/vuoti
-		$data = array_filter($data, function($value) {
-			return $value !== null && $value !== '';
-		});
-		
-		wp_send_json_success($data);
-	}
-	
-	/**
 	 * Quando si salva un contratto
 	 */
 	public static function on_contract_save($post_id) {
-		if (get_post_type($post_id) !== 'contratti' || self::$is_saving) {
+		if (get_post_type($post_id) !== 'contratti') {
 			return;
 		}
 		
-		self::$is_saving = true;
-		
-		$is_new_post = get_post_status($post_id) === 'auto-draft' || 
-					   (isset($_POST['post_status']) && $_POST['post_status'] === 'auto-draft');
-		
-		// 1. Normalizza date
+		// 1. Normalizza tutte le date al formato Y-m-d
 		self::normalize_dates($post_id);
 		
-		// 2. SEMPRE ricalcola scadenza (non è più editabile)
-		self::force_calculate_scadenza($post_id);
+		// 2. Calcola scadenza se mancante
+		self::auto_calculate_scadenza($post_id);
 		
 		// 3. Aggiorna stato basato su scadenza
 		self::update_stato($post_id);
 		
 		// 4. Imposta titolo automatico
 		self::set_contract_title($post_id);
-		
-		// 5. Log operazione
-		if ($is_new_post) {
-			self::log_operazione($post_id, 'creazione', null, 'Contratto creato');
-		} else {
-			self::log_operazione($post_id, 'modifica', null, 'Contratto modificato');
-		}
-		
-		self::$is_saving = false;
 	}
 	
 	/**
@@ -147,16 +85,21 @@ class SPM_Contract_Handler {
 	}
 	
 	/**
-	 * FORZA il calcolo della scadenza (sempre, anche se presente)
+	 * Calcola automaticamente la scadenza
 	 */
-	private static function force_calculate_scadenza($post_id) {
+	private static function auto_calculate_scadenza($post_id) {
+		$scadenza = get_field('data_prossima_scadenza', $post_id);
+		
+		// Se già presente, non ricalcolare
+		if (!empty($scadenza)) {
+			return;
+		}
+		
 		$data_attivazione = get_field('data_attivazione', $post_id);
 		$frequenza = get_field('frequenza', $post_id);
 		
 		if ($data_attivazione && $frequenza) {
 			$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($data_attivazione, $frequenza);
-			
-			// Aggiorna sempre, ignorando valore esistente
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 		}
 	}
@@ -178,10 +121,8 @@ class SPM_Contract_Handler {
 			
 			if ($is_expired && $stato !== 'scaduto') {
 				update_field('stato', 'scaduto', $post_id);
-				self::log_operazione($post_id, 'scadenza', null, 'Contratto scaduto automaticamente');
 			} elseif (!$is_expired && $stato === 'scaduto') {
 				update_field('stato', 'attivo', $post_id);
-				self::log_operazione($post_id, 'riattivazione', null, 'Contratto riattivato automaticamente');
 			}
 		}
 	}
@@ -197,7 +138,8 @@ class SPM_Contract_Handler {
 			$cliente_nome = get_the_title($cliente_id);
 			$servizio_nome = get_the_title($servizio_id);
 			
-			$title = sprintf('#%d - %s - %s', $post_id, $cliente_nome, $servizio_nome);
+			$title = sprintf('#%d - %s - %s', $post_id, $cliente_nome, $servizio_nome); //obsoleto
+			$title = sprintf('#%d', $post_id);
 			
 			// Evita loop infinito
 			remove_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
@@ -212,44 +154,7 @@ class SPM_Contract_Handler {
 	}
 	
 	/**
-	 * LOG OPERAZIONE - Nuovo sistema di storico completo
-	 */
-	private static function log_operazione($post_id, $tipo_operazione, $importo = null, $note = '') {
-		$storico = get_field('storico_contratto', $post_id) ?: [];
-		
-		// Se importo non specificato, usa il prezzo del contratto
-		if ($importo === null && in_array($tipo_operazione, ['creazione', 'attivazione', 'rinnovo_automatico', 'rinnovo_manuale'])) {
-			$importo = get_field('prezzo_contratto', $post_id);
-			if (!$importo) {
-				$servizio_id = get_field('servizio', $post_id);
-				$importo = get_field('prezzo_base', $servizio_id);
-			}
-		}
-		
-		// Ottieni utente corrente
-		$current_user = wp_get_current_user();
-		$utente = $current_user->display_name ?: 'Sistema';
-		
-		// Aggiungi nuova voce al log
-		$nuova_voce = [
-			'data_operazione' => date('Y-m-d'),
-			'ora_operazione' => date('H:i'),
-			'tipo_operazione' => $tipo_operazione,
-			'importo' => $importo,
-			'utente' => $utente,
-			'note' => $note
-		];
-		
-		array_unshift($storico, $nuova_voce); // Aggiungi in cima (più recenti prima)
-		
-		// Mantieni solo ultimi 50 record per performance
-		$storico = array_slice($storico, 0, 50);
-		
-		update_field('storico_contratto', $storico, $post_id);
-	}
-	
-	/**
-	 * RINNOVA CONTRATTO - Versione migliorata
+	 * RINNOVA CONTRATTO
 	 */
 	public static function rinnova_contratto($post_id) {
 		$stato = get_field('stato', $post_id);
@@ -263,28 +168,22 @@ class SPM_Contract_Handler {
 		$frequenza = get_field('frequenza', $post_id);
 		
 		if (!$scadenza_attuale || !$frequenza) {
-			return ['success' => false, 'message' => 'Dati mancanti per il rinnovo'];
+			return ['success' => false, 'message' => 'Dati mancanti'];
 		}
 		
 		// Calcola nuova scadenza
 		$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
 		
-		// Aggiorna dati contratto
+		// Aggiorna
 		update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 		update_field('stato', 'attivo', $post_id);
 		
-		// Log operazione
-		$importo = get_field('prezzo_contratto', $post_id);
-		if (!$importo) {
-			$servizio_id = get_field('servizio', $post_id);
-			$importo = get_field('prezzo_base', $servizio_id);
-		}
-		
-		self::log_operazione($post_id, 'rinnovo_manuale', $importo, 'Rinnovo effettuato manualmente fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza));
+		// Aggiungi allo storico
+		self::add_to_storico($post_id, 'manuale', get_field('prezzo_contratto', $post_id));
 		
 		return [
 			'success' => true, 
-			'message' => 'Contratto rinnovato fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+			'message' => 'Rinnovato fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
 		];
 	}
 	
@@ -292,13 +191,8 @@ class SPM_Contract_Handler {
 	 * SOSPENDI CONTRATTO
 	 */
 	public static function sospendi_contratto($post_id) {
-		$stato_precedente = get_field('stato', $post_id);
-		
 		update_field('stato', 'sospeso', $post_id);
-		
-		self::log_operazione($post_id, 'sospensione', null, "Contratto sospeso (era: $stato_precedente)");
-		
-		return ['success' => true, 'message' => 'Contratto sospeso con successo'];
+		return ['success' => true, 'message' => 'Contratto sospeso'];
 	}
 	
 	/**
@@ -311,23 +205,37 @@ class SPM_Contract_Handler {
 		$nuovo_stato = SPM_Date_Helper::is_expired($scadenza) ? 'scaduto' : 'attivo';
 		
 		update_field('stato', $nuovo_stato, $post_id);
-		
-		self::log_operazione($post_id, 'riattivazione', null, "Contratto riattivato con stato: $nuovo_stato");
-		
-		return ['success' => true, 'message' => "Contratto riattivato (stato: $nuovo_stato)"];
+		return ['success' => true, 'message' => 'Contratto riattivato'];
 	}
 	
 	/**
 	 * CESSA CONTRATTO
 	 */
 	public static function cessa_contratto($post_id) {
-		$stato_precedente = get_field('stato', $post_id);
-		
 		update_field('stato', 'cessato', $post_id);
-		
-		self::log_operazione($post_id, 'cessazione', null, "Contratto cessato definitivamente (era: $stato_precedente)");
-		
 		return ['success' => true, 'message' => 'Contratto cessato definitivamente'];
+	}
+	
+	/**
+	 * Aggiungi voce allo storico rinnovi
+	 */
+	private static function add_to_storico($post_id, $tipo = 'manuale', $importo = null) {
+		$storico = get_field('storico_rinnovi', $post_id) ?: [];
+		
+		$importo = $importo ?? get_field('prezzo_contratto', $post_id);
+		if (!$importo) {
+			$servizio_id = get_field('servizio', $post_id);
+			$importo = get_field('prezzo_base', $servizio_id);
+		}
+		
+		$storico[] = [
+			'data_rinnovo' => date('Y-m-d'),
+			'importo' => $importo,
+			'tipo' => $tipo,
+			'note' => 'Rinnovo ' . $tipo . ' effettuato'
+		];
+		
+		update_field('storico_rinnovi', $storico, $post_id);
 	}
 	
 	/**
@@ -363,14 +271,7 @@ class SPM_Contract_Handler {
 		
 		if ($query->have_posts()) {
 			foreach ($query->posts as $post) {
-				$old_stato = get_field('stato', $post->ID);
 				self::update_stato($post->ID);
-				
-				// Se cambiato stato, logga
-				$new_stato = get_field('stato', $post->ID);
-				if ($old_stato !== $new_stato) {
-					self::log_operazione($post->ID, 'scadenza', null, 'Stato aggiornato automaticamente da controllo giornaliero');
-				}
 			}
 		}
 	}
@@ -405,27 +306,10 @@ class SPM_Contract_Handler {
 		
 		if ($query->have_posts()) {
 			foreach ($query->posts as $post) {
-				// Rinnovo automatico
-				$scadenza_attuale = get_field('data_prossima_scadenza', $post->ID);
-				$frequenza = get_field('frequenza', $post->ID);
-				
-				if ($scadenza_attuale && $frequenza) {
-					$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
-					
-					update_field('data_prossima_scadenza', $nuova_scadenza, $post->ID);
-					update_field('stato', 'attivo', $post->ID);
-					
-					// Log rinnovo automatico
-					$importo = get_field('prezzo_contratto', $post->ID);
-					if (!$importo) {
-						$servizio_id = get_field('servizio', $post->ID);
-						$importo = get_field('prezzo_base', $servizio_id);
-					}
-					
-					self::log_operazione($post->ID, 'rinnovo_automatico', $importo, 'Rinnovo automatico eseguito fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza));
-					
-					// Log sistema
-					error_log('SPM: Rinnovo automatico contratto #' . $post->ID . ' fino al ' . $nuova_scadenza);
+				$result = self::rinnova_contratto($post->ID);
+				if ($result['success']) {
+					// Log o notifica admin
+					error_log('Rinnovo automatico contratto #' . $post->ID);
 				}
 			}
 		}
@@ -457,10 +341,7 @@ class SPM_Contract_Handler {
 				
 				// Invia reminder se corrisponde ai giorni preavviso
 				if ($giorni_mancanti == $giorni_preavviso) {
-					$sent = self::send_reminder_email($post->ID);
-					if ($sent) {
-						self::log_operazione($post->ID, 'modifica', null, "Reminder email inviato ($giorni_mancanti giorni alla scadenza)");
-					}
+					self::send_reminder_email($post->ID);
 				}
 			}
 		}
@@ -495,20 +376,23 @@ class SPM_Contract_Handler {
 	 * COLONNE ADMIN
 	 */
 	public static function add_admin_columns($columns) {
+		// Manteniamo l'assetto esistente e inseriamo la colonna "frequenza"
 		$new_columns = [
-			'cb' => $columns['cb'],
-			'title' => 'Contratto',
-			'cliente' => 'Cliente',
+			'cb'       => $columns['cb'],
+			'title'    => 'Contratto',
+			'cliente'  => 'Cliente',
 			'servizio' => 'Servizio',
+			'frequenza'=> 'Frequenza', 
 			'scadenza' => 'Scadenza',
-			'stato' => 'Stato',
-			'azioni' => 'Azioni Rapide'
+			'stato'    => 'Stato',
+			'azioni'   => 'Azioni Rapide'
 		];
 		return $new_columns;
 	}
 	
 	public static function render_admin_columns($column, $post_id) {
 		switch ($column) {
+			
 			case 'cliente':
 				$cliente_id = get_field('cliente', $post_id);
 				echo $cliente_id ? esc_html(get_the_title($cliente_id)) : '—';
@@ -519,6 +403,17 @@ class SPM_Contract_Handler {
 				echo $servizio_id ? esc_html(get_the_title($servizio_id)) : '—';
 				break;
 				
+			case 'frequenza':
+				$freq = function_exists('get_field') ? get_field('frequenza', $post_id) : get_post_meta($post_id, 'frequenza', true);
+				$labels = [
+					'mensile'     => 'Mensile',
+					'trimestrale' => 'Trimestrale',
+					'semestrale'  => 'Semestrale',
+					'annuale'     => 'Annuale',
+				];
+				echo esc_html($labels[$freq] ?? ($freq ? ucfirst($freq) : '—'));
+				break;
+				
 			case 'scadenza':
 				$scadenza = get_field('data_prossima_scadenza', $post_id);
 				if ($scadenza) {
@@ -526,11 +421,11 @@ class SPM_Contract_Handler {
 					$display = SPM_Date_Helper::to_display_format($scadenza);
 					
 					if ($giorni < 0) {
-						echo '<span style="color:red">⚠️ ' . $display . '</span>';
+						echo '<span style="color:red">⚠️ ' . esc_html($display) . '</span>';
 					} elseif ($giorni <= 30) {
-						echo '<span style="color:orange">⏰ ' . $display . '</span>';
+						echo '<span style="color:orange">⏰ ' . esc_html($display) . '</span>';
 					} else {
-						echo '<span style="color:green">✓ ' . $display . '</span>';
+						echo '<span style="color:green">✓ ' . esc_html($display) . '</span>';
 					}
 				} else {
 					echo '—';
@@ -539,39 +434,34 @@ class SPM_Contract_Handler {
 				
 			case 'stato':
 				$stato = get_field('stato', $post_id);
-				$stato_key = $stato ?: 'indefinito'; // fallback
 				$colors = [
-					'attivo' => 'green',
+					'attivo'  => 'green',
 					'sospeso' => 'orange',
 					'scaduto' => 'red',
 					'cessato' => 'gray'
 				];
 				$emoji = [
-					'attivo' => '🟢',
+					'attivo'  => '🟢',
 					'sospeso' => '🟡',
 					'scaduto' => '🔴',
 					'cessato' => '⚫'
 				];
 				$color = $colors[$stato] ?? 'gray';
-				$icon = $emoji[$stato] ?? '';
-				// Label sicura: se $stato è null, mostra "—"
-				$label = ($stato !== null && $stato !== '') 
-					? ucfirst((string)$stato) 
-					: '—';
-				echo '<span style="color:' . $color . '">' . $icon . ' ' . ucfirst($stato) . '</span>';
+				$icon  = $emoji[$stato] ?? '';
+				echo '<span style="color:' . esc_attr($color) . '">' . esc_html($icon . ' ' . ucfirst($stato)) . '</span>';
 				break;
 				
 			case 'azioni':
 				$stato = get_field('stato', $post_id);
 				
 				if ($stato !== 'cessato') {
-					echo '<button class="button button-small spm-action" data-action="rinnova" data-id="' . $post_id . '">Rinnova</button> ';
+					echo '<button class="button button-small spm-action" data-action="rinnova" data-id="' . esc_attr($post_id) . '">Rinnova</button> ';
 				}
 				
 				if ($stato === 'attivo') {
-					echo '<button class="button button-small spm-action" data-action="sospendi" data-id="' . $post_id . '">Sospendi</button>';
+					echo '<button class="button button-small spm-action" data-action="sospendi" data-id="' . esc_attr($post_id) . '">Sospendi</button>';
 				} elseif ($stato === 'sospeso') {
-					echo '<button class="button button-small spm-action" data-action="riattiva" data-id="' . $post_id . '">Riattiva</button>';
+					echo '<button class="button button-small spm-action" data-action="riattiva" data-id="' . esc_attr($post_id) . '">Riattiva</button>';
 				}
 				break;
 		}
@@ -593,42 +483,27 @@ class SPM_Contract_Handler {
 	
 	public static function render_action_metabox($post) {
 		$stato = get_field('stato', $post->ID);
-		$scadenza = get_field('data_prossima_scadenza', $post->ID);
-		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : 999;
 		?>
 		<div id="spm-actions-box">
-			<!-- Info stato -->
-			<div style="background: #f9f9f9; padding: 10px; margin-bottom: 15px; border-left: 4px solid #0073aa;">
-				<?php
-				$stato_label = $stato !== null && $stato !== '' ? ucfirst((string)$stato) : '—';
-				?>
-				<strong>Stato:</strong> <?php echo esc_html($stato_label); ?><br>
-				<?php if ($scadenza): ?>
-					<strong>Scadenza:</strong> <?php echo SPM_Date_Helper::to_display_format($scadenza); ?><br>
-					<strong>Giorni mancanti:</strong> <?php echo $giorni_mancanti; ?>
-				<?php endif; ?>
-			</div>
-			
-			<!-- Azioni -->
 			<?php if ($stato !== 'cessato'): ?>
-				<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo $post->ID; ?>">
+				<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo esc_attr($post->ID); ?>">
 					🔄 Rinnova Contratto
 				</button></p>
 			<?php endif; ?>
 			
 			<?php if ($stato === 'attivo'): ?>
-				<p><button class="button spm-action" data-action="sospendi" data-id="<?php echo $post->ID; ?>">
+				<p><button class="button spm-action" data-action="sospendi" data-id="<?php echo esc_attr($post->ID); ?>">
 					⏸️ Sospendi
 				</button></p>
 			<?php elseif ($stato === 'sospeso'): ?>
-				<p><button class="button spm-action" data-action="riattiva" data-id="<?php echo $post->ID; ?>">
+				<p><button class="button spm-action" data-action="riattiva" data-id="<?php echo esc_attr($post->ID); ?>">
 					▶️ Riattiva
 				</button></p>
 			<?php endif; ?>
 			
 			<?php if ($stato !== 'cessato'): ?>
 				<hr>
-				<p><button class="button spm-action" data-action="cessa" data-id="<?php echo $post->ID; ?>" 
+				<p><button class="button spm-action" data-action="cessa" data-id="<?php echo esc_attr($post->ID); ?>" 
 					onclick="return confirm('Cessare definitivamente il contratto?');">
 					⛔ Cessa Contratto
 				</button></p>
@@ -659,8 +534,8 @@ class SPM_Contract_Handler {
 						alert(response.data.message);
 						location.reload();
 					} else {
-						alert('Errore: ' + (response.data?.message || 'Operazione fallita'));
-						btn.prop('disabled', false);
+						alert('Errore: ' + (response.data && response.data.message ? response.data.message : 'Operazione non riuscita'));
+						btn.prop('disabled', false).text(btn.data('label') || btn.text());
 					}
 				});
 			});
@@ -699,10 +574,83 @@ class SPM_Contract_Handler {
 				break;
 		}
 		
-		if ($result && $result['success']) {
+		if ($result && isset($result['success']) && $result['success']) {
 			wp_send_json_success($result);
 		} else {
 			wp_send_json_error($result ?: ['message' => 'Azione non valida']);
+		}
+	}
+
+	/* =======================
+	 * PUNTO 2: FREQUENZA - filtro/ordinamento
+	 * ======================= */
+
+	// Rende la colonna "frequenza" ordinabile
+	public static function sortable_tipo($cols) {
+		$cols['frequenza'] = 'frequenza';
+		return $cols;
+	}
+
+	// Rank logico per l'ordinamento (1=mensile, 12=annuale)
+	private static function rank_for_freq($f) {
+		$map = ['mensile'=>1,'trimestrale'=>3,'semestrale'=>6,'annuale'=>12];
+		return isset($map[$f]) ? $map[$f] : 0;
+	}
+
+	// Salva/aggiorna il meta "frequenza_rank" ad ogni salvataggio contratto
+	public static function save_freq_rank($post_id, $post, $update) {
+		if (wp_is_post_autosave($post_id) || wp_is_post_revision($post_id)) return;
+		if (get_post_type($post_id) !== 'contratti') return;
+		$freq = function_exists('get_field') ? get_field('frequenza', $post_id) : get_post_meta($post_id, 'frequenza', true);
+		if ($freq) {
+			update_post_meta($post_id, 'frequenza_rank', self::rank_for_freq($freq));
+		}
+	}
+
+	// UI del filtro in lista (tendina "Tipo contratto")
+	public static function filter_tipo_ui($post_type) {
+		if ($post_type !== 'contratti') return;
+
+		$current = isset($_GET['filtro_frequenza']) ? sanitize_text_field($_GET['filtro_frequenza']) : '';
+		$opts = [
+			''            => 'Tutti i tipi',
+			'mensile'     => 'Mensile',
+			'trimestrale' => 'Trimestrale',
+			'semestrale'  => 'Semestrale',
+			'annuale'     => 'Annuale',
+		];
+
+		echo '<label class="screen-reader-text" for="filtro_frequenza">Tipo contratto</label>';
+		echo '<select name="filtro_frequenza" id="filtro_frequenza">';
+		foreach ($opts as $value => $label) {
+			printf('<option value="%s"%s>%s</option>',
+				esc_attr($value),
+				selected($current, $value, false),
+				esc_html($label)
+			);
+		}
+		echo '</select>';
+	}
+
+	// Applica filtro e ordinamento alla query principale dell'admin list
+	public static function apply_tipo_order_and_filter($q) {
+		if (!is_admin() || !$q->is_main_query()) return;
+		if ($q->get('post_type') !== 'contratti') return;
+
+		// Filtro per frequenza
+		if (!empty($_GET['filtro_frequenza'])) {
+			$q->set('meta_query', [[
+				'key'     => 'frequenza',
+				'value'   => sanitize_text_field($_GET['filtro_frequenza']),
+				'compare' => '='
+			]]);
+		}
+
+		// Ordinamento sulla colonna "frequenza"
+		if ($q->get('orderby') === 'frequenza') {
+			// usa il rank numerico se presente, altrimenti cade a 0
+			$q->set('meta_key', 'frequenza_rank');
+			$q->set('orderby', 'meta_value_num');
 		}
 	}
 }
