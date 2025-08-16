@@ -101,33 +101,43 @@ class SPM_Contract_Handler {
 		if (get_post_type($post_id) !== 'contratti' || self::$is_saving) {
 			return;
 		}
-		
+	
+		// Evita salvataggi "fantasma"
+		if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
+			return;
+		}
+	
 		self::$is_saving = true;
-		
-		$is_new_post = get_post_status($post_id) === 'auto-draft' || 
-					   (isset($_POST['post_status']) && $_POST['post_status'] === 'auto-draft');
-		
-		// 1. Normalizza date
+	
+		// 1) Normalizza date
 		self::normalize_dates($post_id);
-		
-		// 2. SEMPRE ricalcola scadenza (non è più editabile)
+	
+		// 2) SEMPRE ricalcola scadenza (non è più editabile)
 		self::force_calculate_scadenza($post_id);
-		
-		// 3. Aggiorna stato basato su scadenza
-		self::update_stato($post_id);
-		
-		// 4. Imposta titolo automatico
-		self::set_contract_title($post_id);
-		
-		// 5. Log operazione
-		if ($is_new_post) {
+	
+		// --- DECISIONE PRIMO LOG PRIMA DI UPDATE_STATO ---
+		$storico = get_field('storico_contratto', $post_id);
+		$is_first_log = empty($storico) || (is_array($storico) && count($storico) === 0);
+	
+		// 3) Se è il primo salvataggio, logga subito "creazione"
+		if ($is_first_log) {
 			self::log_operazione($post_id, 'creazione', null, 'Contratto creato');
-		} else {
+		}
+	
+		// 4) Aggiorna stato basato su scadenza (potrebbe loggare "scadenza")
+		self::update_stato($post_id);
+	
+		// 5) Imposta titolo automatico
+		self::set_contract_title($post_id);
+	
+		// 6) Se NON era il primo salvataggio, logga "modifica"
+		if (!$is_first_log) {
 			self::log_operazione($post_id, 'modifica', null, 'Contratto modificato');
 		}
-		
+	
 		self::$is_saving = false;
 	}
+
 	
 	/**
 	 * Normalizza le date al formato standard
@@ -217,12 +227,16 @@ class SPM_Contract_Handler {
 	private static function log_operazione($post_id, $tipo_operazione, $importo = null, $note = '') {
 		$storico = get_field('storico_contratto', $post_id) ?: [];
 		
-		// Se importo non specificato, usa il prezzo del contratto
-		if ($importo === null && in_array($tipo_operazione, ['creazione', 'attivazione', 'rinnovo_automatico', 'rinnovo_manuale'])) {
-			$importo = get_field('prezzo_contratto', $post_id);
-			if (!$importo) {
+		// Se importo non specificato, calcolalo SEMPRE dal contratto/servizio
+		if ($importo === null) {
+			// attenzione: "0" (string) o 0 (int) sono valori validi, quindi uso controlli stretti
+			$val = get_field('prezzo_contratto', $post_id);
+			if ($val !== '' && $val !== null) {
+				$importo = $val;
+			} else {
 				$servizio_id = get_field('servizio', $post_id);
-				$importo = get_field('prezzo_base', $servizio_id);
+				$val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
+				$importo = ($val !== '' && $val !== null) ? $val : 0; // fallback finale
 			}
 		}
 		

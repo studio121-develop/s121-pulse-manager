@@ -132,7 +132,7 @@
           }
 
          if ($frequenzaField && data.frequenza_ricorrenza !== undefined) {
-             $frequenzaField.val(data.frequenza_ricorrenza).trigger('change');
+            $frequenzaField.$input().val(data.frequenza_ricorrenza).trigger('change');
              console.log('📅 Frequenza FORZATA a:', data.frequenza_ricorrenza);
          }
 
@@ -216,11 +216,11 @@
 
     // Eventi per ricalcolo automatico
     if ($dataAttivazione) {
-      $dataAttivazione.on('change', aggiornaAnteprimaScadenza);
+      $dataAttivazione.$input().on('change', aggiornaAnteprimaScadenza);
     }
 
     if ($frequenzaField) {
-      $frequenzaField.on('change', aggiornaAnteprimaScadenza);
+     $frequenzaField.$input().on('change', aggiornaAnteprimaScadenza);
     }
 
     // Evento cambio servizio

@@ -48,7 +48,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'ui' => 1,
 				'return_format' => 'id',
 				'wrapper' => ['width' => '50'],
-				'instructions' => 'La selezione precompilerà automaticamente prezzo, frequenza e note',
+				'instructions' => '',
 			],
 			
 			// Prezzo contratto (override del servizio)
@@ -57,7 +57,7 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Prezzo Contratto',
 				'name' => 'prezzo_contratto',
 				'type' => 'number',
-				'instructions' => 'Precompilato dal servizio. Modifica per personalizzare.',
+				'instructions' => '',
 				'prepend' => '€',
 				'step' => 0.01,
 				'min' => 0,
