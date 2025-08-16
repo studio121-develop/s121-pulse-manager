@@ -260,21 +260,6 @@ if (function_exists('acf_add_local_field_group')) {
 					],
 				],
 			],
-			
-			// Anteprima calcolo scadenza
-			[
-				'key' => 'field_spm_contratto_preview',
-				'label' => 'Anteprima Calcolo Scadenza',
-				'name' => 'preview_scadenza',
-				'type' => 'message',
-				'message' => '<div id="spm-scadenza-preview" style="padding: 15px; background: #f0f8ff; border-left: 4px solid #0073aa; margin: 10px 0;">
-					<strong>Calcolo Automatico:</strong><br>
-					Data Attivazione: <span id="preview-attivazione">—</span><br>
-					Frequenza: <span id="preview-frequenza">—</span><br>
-					<strong>Prossima Scadenza: <span id="preview-scadenza" style="color: #0073aa;">—</span></strong>
-				</div>',
-				'new_lines' => '',
-			],
 		],
 		'location' => [[
 			['param' => 'post_type', 'operator' => '==', 'value' => 'contratti']

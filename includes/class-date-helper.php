@@ -91,16 +91,35 @@ class SPM_Date_Helper {
 	
 	/**
 	 * Calcola giorni rimanenti alla scadenza
+	 * (positivo = mancano N giorni, negativo = scaduto da N giorni)
 	 */
 	public static function days_until_due($due_date) {
 		$db_date = self::to_db_format($due_date);
 		if (!$db_date) return 999;
 		
-		$today = new DateTime();
-		$due = new DateTime($db_date);
+		$today = new DateTime('today'); // ← così ignoriamo l'orario
+		$due   = new DateTime($db_date);
 		$interval = $today->diff($due);
 		
 		return $interval->invert ? -$interval->days : $interval->days;
+	}
+	
+	/**
+	 * Giorni trascorsi rispetto alla scadenza.
+	 * Ritorna:
+	 *   > 0  = scadenza nel passato (da quanti giorni è scaduto)
+	 *     0  = scade oggi
+	 *   < 0  = scadenza nel futuro (mancano N giorni)
+	 * null   = data non valida
+	 */
+	public static function days_since_due($due_date) {
+		$db_date = self::to_db_format($due_date);
+		if (!$db_date) return null;
+
+		$today = new DateTime('today');
+		$due   = new DateTime($db_date);
+
+		return (int)$due->diff($today)->format('%r%a');
 	}
 	
 	/**

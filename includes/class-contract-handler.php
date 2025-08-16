@@ -14,6 +14,35 @@ defined('ABSPATH') || exit;
 class SPM_Contract_Handler {
 	
 	private static $is_saving = false; // Previeni loop infiniti
+
+	// --- POLICY CONTRATTI ---
+	// entro questa soglia è "scaduto poco" -> rinnovo consentito con allineamento
+	private const TOLLERANZA_SCADUTO_GIORNI = 60;
+	// oltre questa soglia è "scaduto troppo" -> considerato cessato
+	private const AUTO_CESSAZIONE_GIORNI    = 90;
+
+
+	/**
+	 * Avanza la scadenza di N periodi finché non è > oggi.
+	 * Ritorna array [$nuovaData, $passiEffettuati].
+	 * Limite di sicurezza 120 per evitare loop.
+	 */
+	private static function roll_forward_due_date($from_date, $frequenza) {
+		$next  = $from_date;
+		$steps = 0;
+		for ($i = 0; $i < 120; $i++) {
+			// se NON è scaduta (<= oggi è scaduta), interrompi
+			if (!SPM_Date_Helper::is_expired($next)) break;
+			$next = SPM_Date_Helper::calculate_next_due_date($next, $frequenza);
+			$steps++;
+		}
+		// se era nel futuro già all'inizio, garantisci almeno 1 passo per casi attivi
+		if ($steps === 0 && !SPM_Date_Helper::is_expired($from_date)) {
+			$next = SPM_Date_Helper::calculate_next_due_date($from_date, $frequenza);
+			$steps = 1;
+		}
+		return [$next, $steps];
+	}
 	
 	/**
 	 * Inizializza la classe
@@ -124,7 +153,7 @@ class SPM_Contract_Handler {
 			self::log_operazione($post_id, 'creazione', null, 'Contratto creato');
 		}
 	
-		// 4) Aggiorna stato basato su scadenza (potrebbe loggare "scadenza")
+		// 4) Aggiorna stato basato su scadenza (potrebbe loggare "scadenza" o "cessazione auto")
 		self::update_stato($post_id);
 	
 		// 5) Imposta titolo automatico
@@ -172,26 +201,40 @@ class SPM_Contract_Handler {
 	}
 	
 	/**
-	 * Aggiorna stato basato su scadenza
+	 * Aggiorna stato basato su scadenza (con auto-cessazione oltre soglia)
 	 */
 	private static function update_stato($post_id) {
 		$scadenza = get_field('data_prossima_scadenza', $post_id);
-		$stato = get_field('stato', $post_id);
-		
-		// Non toccare stati manuali (sospeso/cessato)
-		if (in_array($stato, ['sospeso', 'cessato'])) {
+		$stato    = get_field('stato', $post_id);
+
+		// Non toccare stati finali manuali
+		if (in_array($stato, ['cessato'])) {
 			return;
 		}
-		
+
 		if ($scadenza) {
 			$is_expired = SPM_Date_Helper::is_expired($scadenza);
-			
-			if ($is_expired && $stato !== 'scaduto') {
-				update_field('stato', 'scaduto', $post_id);
-				self::log_operazione($post_id, 'scadenza', null, 'Contratto scaduto automaticamente');
-			} elseif (!$is_expired && $stato === 'scaduto') {
-				update_field('stato', 'attivo', $post_id);
-				self::log_operazione($post_id, 'riattivazione', null, 'Contratto riattivato automaticamente');
+			$days_since = SPM_Date_Helper::days_since_due($scadenza);
+
+			// 1) Se troppo arretrato -> auto-cessato e stop
+			if ($is_expired && $days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
+				update_field('stato', 'cessato', $post_id);
+				self::log_operazione($post_id, 'cessazione', 0, "Auto-cessazione: scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ").");
+				return;
+			}
+
+			// 2) Altrimenti, stato coerente con la data
+			if ($is_expired) {
+				if ($stato !== 'scaduto' && $stato !== 'sospeso') {
+					update_field('stato', 'scaduto', $post_id);
+					self::log_operazione($post_id, 'scadenza', null, 'Contratto scaduto automaticamente');
+				}
+			} else {
+				// Se era scaduto ma ora non più -> torna attivo (non forzo se sospeso)
+				if ($stato === 'scaduto') {
+					update_field('stato', 'attivo', $post_id);
+					self::log_operazione($post_id, 'riattivazione', null, 'Contratto riattivato automaticamente');
+				}
 			}
 		}
 	}
@@ -263,43 +306,81 @@ class SPM_Contract_Handler {
 	}
 	
 	/**
-	 * RINNOVA CONTRATTO - Versione migliorata
+	 * RINNOVA CONTRATTO - Policy: attivo = +1; scaduto poco = allinea; scaduto troppo = cessato, no rinnovo
 	 */
 	public static function rinnova_contratto($post_id) {
 		$stato = get_field('stato', $post_id);
 		
 		// Verifica se rinnovabile
 		if ($stato === 'cessato') {
-			return ['success' => false, 'message' => 'Contratto cessato non rinnovabile'];
+			return ['success' => false, 'message' => 'Contratto cessato: rinnovo non consentito'];
 		}
 		
 		$scadenza_attuale = get_field('data_prossima_scadenza', $post_id);
-		$frequenza = get_field('frequenza', $post_id);
+		$frequenza        = get_field('frequenza', $post_id);
 		
 		if (!$scadenza_attuale || !$frequenza) {
 			return ['success' => false, 'message' => 'Dati mancanti per il rinnovo'];
 		}
-		
-		// Calcola nuova scadenza
-		$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
-		
-		// Aggiorna dati contratto
-		update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
-		update_field('stato', 'attivo', $post_id);
-		
-		// Log operazione
+
+		$days_since = SPM_Date_Helper::days_since_due($scadenza_attuale);
+
+		// CASO 3: SCADUTO TROPPO -> consideralo cessato e blocca
+		if ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
+			update_field('stato', 'cessato', $post_id);
+			self::log_operazione($post_id, 'cessazione', 0, "Blocco rinnovo: scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ").");
+			return ['success' => false, 'message' => 'Contratto scaduto da troppo tempo: considerato cessato. Non rinnovabile.'];
+		}
+
+		// Importo robusto (mai vuoto)
 		$importo = get_field('prezzo_contratto', $post_id);
-		if (!$importo) {
+		if ($importo === '' || $importo === null) {
 			$servizio_id = get_field('servizio', $post_id);
-			$importo = get_field('prezzo_base', $servizio_id);
+			$val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
+			$importo = ($val !== '' && $val !== null) ? $val : 0;
 		}
 		
-		self::log_operazione($post_id, 'rinnovo_manuale', $importo, 'Rinnovo effettuato manualmente fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza));
+		// CASO 1: ATTIVO (scadenza oggi o futuro) -> +1 periodo
+		if ($days_since !== null && $days_since <= 0) {
+			$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
+			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
+			update_field('stato', 'attivo', $post_id);
+			
+			self::log_operazione(
+				$post_id,
+				'rinnovo_manuale',
+				$importo,
+				'Rinnovo di 1 periodo. Nuova scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+			);
+			
+			return [
+				'success' => true, 
+				'message' => 'Contratto rinnovato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+			];
+		}
+
+		// CASO 2: SCADUTO POCO (entro tolleranza) -> allinea oltre oggi (catch-up)
+		if ($days_since !== null && $days_since > 0 && $days_since <= self::TOLLERANZA_SCADUTO_GIORNI) {
+			[$nuova_scadenza, $steps] = self::roll_forward_due_date($scadenza_attuale, $frequenza);
+			
+			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
+			update_field('stato', 'attivo', $post_id);
+			
+			self::log_operazione(
+				$post_id,
+				'rinnovo_manuale',
+				$importo,
+				sprintf('Allineamento in ritardo: +%d periodi. Nuova scadenza: %s', max(1, (int)$steps), SPM_Date_Helper::to_display_format($nuova_scadenza))
+			);
+			
+			return [
+				'success' => true, 
+				'message' => 'Contratto allineato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+			];
+		}
 		
-		return [
-			'success' => true, 
-			'message' => 'Contratto rinnovato fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
-		];
+		// Fallback teorico
+		return ['success' => false, 'message' => 'Impossibile rinnovare in questo stato.'];
 	}
 	
 	/**
@@ -363,14 +444,15 @@ class SPM_Contract_Handler {
 	 */
 	private static function check_contratti_scaduti() {
 		$args = [
-			'post_type' => 'contratti',
-			'posts_per_page' => -1,
-			'meta_query' => [
-				[
-					'key' => 'stato',
-					'value' => 'attivo'
-				]
-			]
+		  'post_type'      => 'contratti',
+		  'posts_per_page' => -1,
+		  'meta_query'     => [
+			[
+			  'key'     => 'stato',
+			  'value'   => ['attivo', 'scaduto'],
+			  'compare' => 'IN',
+			],
+		  ],
 		];
 		
 		$query = new WP_Query($args);
@@ -383,8 +465,17 @@ class SPM_Contract_Handler {
 				// Se cambiato stato, logga
 				$new_stato = get_field('stato', $post->ID);
 				if ($old_stato !== $new_stato) {
-					self::log_operazione($post->ID, 'scadenza', null, 'Stato aggiornato automaticamente da controllo giornaliero');
+					// Evita doppio log se update_stato ha già loggato la cessazione
+					if ($new_stato !== 'cessato') {
+						self::log_operazione(
+							$post->ID,
+							'scadenza',
+							null,
+							'Stato aggiornato automaticamente da controllo giornaliero'
+						);
+					}
 				}
+				
 			}
 		}
 	}
@@ -419,29 +510,51 @@ class SPM_Contract_Handler {
 		
 		if ($query->have_posts()) {
 			foreach ($query->posts as $post) {
-				// Rinnovo automatico
 				$scadenza_attuale = get_field('data_prossima_scadenza', $post->ID);
-				$frequenza = get_field('frequenza', $post->ID);
-				
-				if ($scadenza_attuale && $frequenza) {
-					$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
-					
-					update_field('data_prossima_scadenza', $nuova_scadenza, $post->ID);
-					update_field('stato', 'attivo', $post->ID);
-					
-					// Log rinnovo automatico
-					$importo = get_field('prezzo_contratto', $post->ID);
-					if (!$importo) {
-						$servizio_id = get_field('servizio', $post->ID);
-						$importo = get_field('prezzo_base', $servizio_id);
-					}
-					
-					self::log_operazione($post->ID, 'rinnovo_automatico', $importo, 'Rinnovo automatico eseguito fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza));
-					
-					// Log sistema
-					error_log('SPM: Rinnovo automatico contratto #' . $post->ID . ' fino al ' . $nuova_scadenza);
+				$frequenza        = get_field('frequenza', $post->ID);
+			
+				if (!$scadenza_attuale || !$frequenza) {
+					continue;
 				}
+			
+				// 1) BLOCCO OLTRE SOGLIA: auto-cessa invece di rinnovare
+				$days_since = SPM_Date_Helper::days_since_due($scadenza_attuale);
+				if ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
+					update_field('stato', 'cessato', $post->ID);
+					self::log_operazione(
+						$post->ID,
+						'cessazione',
+						0,
+						"Auto-cessazione (cron): scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ")."
+					);
+					continue; // passa al prossimo contratto
+				}
+			
+				// 2) RINNOVO AUTOMATICO (policy semplice: +1 periodo)
+				$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
+			
+				update_field('data_prossima_scadenza', $nuova_scadenza, $post->ID);
+				update_field('stato', 'attivo', $post->ID);
+			
+				// importo robusto
+				$importo = get_field('prezzo_contratto', $post->ID);
+				if ($importo === '' || $importo === null) {
+					$servizio_id = get_field('servizio', $post->ID);
+					$val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
+					$importo = ($val !== '' && $val !== null) ? $val : 0;
+				}
+			
+				self::log_operazione(
+					$post->ID,
+					'rinnovo_automatico',
+					$importo,
+					'Rinnovo automatico eseguito fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+				);
+			
+				// log di sistema
+				error_log('SPM: Rinnovo automatico contratto #' . $post->ID . ' fino al ' . $nuova_scadenza);
 			}
+
 		}
 	}
 	
@@ -576,18 +689,31 @@ class SPM_Contract_Handler {
 				break;
 				
 			case 'azioni':
-				$stato = get_field('stato', $post_id);
-				
-				if ($stato !== 'cessato') {
+			$stato = get_field('stato', $post_id);
+			$scadenza = get_field('data_prossima_scadenza', $post_id);
+			
+			$oltre_soglia = false;
+			$days_since = null;
+			if ($scadenza) {
+				$days_since = SPM_Date_Helper::days_since_due($scadenza);
+				$oltre_soglia = ($days_since !== null && $days_since > SPM_Contract_Handler::AUTO_CESSAZIONE_GIORNI);
+			}
+			
+			if ($stato !== 'cessato') {
+				if ($oltre_soglia) {
+					echo '<span style="color:#dc3232;font-weight:bold;">Scaduto da ' . (int)$days_since . ' giorni → Cessazione automatica</span>';
+				} else {
 					echo '<button class="button button-small spm-action" data-action="rinnova" data-id="' . $post_id . '">Rinnova</button> ';
 				}
-				
-				if ($stato === 'attivo') {
-					echo '<button class="button button-small spm-action" data-action="sospendi" data-id="' . $post_id . '">Sospendi</button>';
-				} elseif ($stato === 'sospeso') {
-					echo '<button class="button button-small spm-action" data-action="riattiva" data-id="' . $post_id . '">Riattiva</button>';
-				}
-				break;
+			}
+			
+			if ($stato === 'attivo') {
+				echo '<button class="button button-small spm-action" data-action="sospendi" data-id="' . $post_id . '">Sospendi</button>';
+			} elseif ($stato === 'sospeso') {
+				echo '<button class="button button-small spm-action" data-action="riattiva" data-id="' . $post_id . '">Riattiva</button>';
+			}
+			break;
+
 		}
 	}
 	
@@ -606,9 +732,13 @@ class SPM_Contract_Handler {
 	}
 	
 	public static function render_action_metabox($post) {
-		$stato = get_field('stato', $post->ID);
-		$scadenza = get_field('data_prossima_scadenza', $post->ID);
+		$stato     = get_field('stato', $post->ID);
+		$scadenza  = get_field('data_prossima_scadenza', $post->ID);
 		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : 999;
+	
+		// Calcolo giorni dalla scadenza per la logica "oltre soglia"
+		$days_since   = $scadenza ? SPM_Date_Helper::days_since_due($scadenza) : null;
+		$oltre_soglia = ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI);
 		?>
 		<div id="spm-actions-box">
 			<!-- Info stato -->
@@ -622,14 +752,21 @@ class SPM_Contract_Handler {
 					<strong>Giorni mancanti:</strong> <?php echo $giorni_mancanti; ?>
 				<?php endif; ?>
 			</div>
-			
+	
 			<!-- Azioni -->
 			<?php if ($stato !== 'cessato'): ?>
-				<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo $post->ID; ?>">
-					🔄 Rinnova Contratto
-				</button></p>
+				<?php if ($oltre_soglia): ?>
+					<div style="background:#fff3f3;border-left:4px solid #dc3232;padding:8px;margin-bottom:10px;">
+						Questo contratto è scaduto da <?php echo (int)$days_since; ?> giorni (oltre soglia).
+						Verrà marcato <strong>cessato</strong> automaticamente; rinnovo non consentito.
+					</div>
+				<?php else: ?>
+					<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo $post->ID; ?>">
+						🔄 Rinnova Contratto
+					</button></p>
+				<?php endif; ?>
 			<?php endif; ?>
-			
+	
 			<?php if ($stato === 'attivo'): ?>
 				<p><button class="button spm-action" data-action="sospendi" data-id="<?php echo $post->ID; ?>">
 					⏸️ Sospendi
@@ -639,16 +776,16 @@ class SPM_Contract_Handler {
 					▶️ Riattiva
 				</button></p>
 			<?php endif; ?>
-			
+	
 			<?php if ($stato !== 'cessato'): ?>
 				<hr>
-				<p><button class="button spm-action" data-action="cessa" data-id="<?php echo $post->ID; ?>" 
+				<p><button class="button spm-action" data-action="cessa" data-id="<?php echo $post->ID; ?>"
 					onclick="return confirm('Cessare definitivamente il contratto?');">
 					⛔ Cessa Contratto
 				</button></p>
 			<?php endif; ?>
 		</div>
-		
+	
 		<script>
 		jQuery(document).ready(function($) {
 			$('.spm-action').on('click', function(e) {
@@ -656,13 +793,13 @@ class SPM_Contract_Handler {
 				var btn = $(this);
 				var action = btn.data('action');
 				var id = btn.data('id');
-				
+	
 				if (action === 'cessa' && !confirm('Sei sicuro di voler cessare definitivamente il contratto?')) {
 					return;
 				}
-				
+	
 				btn.prop('disabled', true).text('Elaborazione...');
-				
+	
 				$.post(ajaxurl, {
 					action: 'spm_contract_action',
 					contract_action: action,
@@ -682,6 +819,7 @@ class SPM_Contract_Handler {
 		</script>
 		<?php
 	}
+
 	
 	/**
 	 * HANDLE AJAX
