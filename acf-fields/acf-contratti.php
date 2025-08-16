@@ -270,4 +270,93 @@ if (function_exists('acf_add_local_field_group')) {
 		'label_placement' => 'top',
 		'hide_on_screen' => ['the_content', 'excerpt', 'custom_fields', 'discussion', 'comments', 'slug', 'author'],
 	]);
+	
+
+	
+	/**
+	 * Contratti: blocca UI del repeater "storico_contratto"
+	 * - Rimuove Add/Remove/Duplica/Drag
+	 * - Disabilita l'interazione con i SELECT (ACF Select2 e native) dentro il repeater
+	 * - NON usa "disabled": i valori restano nel POST
+	 */
+	
+	add_action('acf/input/admin_footer', function () {
+		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
+		if (!$screen || $screen->base !== 'post' || $screen->post_type !== 'contratti') {
+			return;
+		}
+		?>
+		<script>
+		(function($){
+			var $rep = $('.acf-field-repeater[data-key="field_spm_contratto_storico"]');
+			if(!$rep.length) return;
+	
+			// 1) Via azioni e maniglie
+			$rep.find('.acf-actions').remove(); // Add row
+			$rep.find('.acf-row-handle, .acf-icon').remove(); // duplica/elimina/drag
+	
+			// 2) Blocca SELECT (sia Select2 che native) DENTRO il repeater
+			//    -> niente apertura menu, niente cambi valore via mouse/tastiera
+			var lockSelect = function($sel){
+				// Blocca eventi comuni
+				$sel.on('mousedown select keydown wheel touchstart', function(e){
+					e.preventDefault(); e.stopImmediatePropagation(); return false;
+				});
+	
+				// Se è Select2 (ACF post_object/ui=1 o select con ui=1)
+				$sel.on('select2:opening select2:unselecting select2:select', function(e){
+					e.preventDefault(); return false;
+				});
+	
+				// Effetto visivo + blocco click sulla “pelle” Select2
+				var $s2 = $sel.next('.select2');
+				if ($s2.length){
+					$s2.addClass('spm-lock').css('pointer-events','none'); // blocca interazione
+				} else {
+					// native <select>
+					$sel.addClass('spm-lock').css('pointer-events','none');
+				}
+			};
+	
+			// Seleziona tutti i <select> nel repeater (ACF li lascia nel DOM anche con Select2)
+			$rep.find('select').each(function(){ lockSelect($(this)); });
+	
+			// 3) Optional: impedisci accidentalmente tastiera su tutto il repeater
+			$rep.on('keydown', function(e){
+				// blocca tasti che cambiano focus/valore/struttura
+				if (['ArrowUp','ArrowDown','Enter',' '].includes(e.key)) {
+					e.preventDefault(); e.stopPropagation();
+				}
+			});
+		})(jQuery);
+		</script>
+		<style>
+		  /* Nascondi qualsiasi azione residua del repeater */
+		  .acf-field-repeater[data-key="field_spm_contratto_storico"] .acf-actions { display:none !important; }
+		  .acf-field-repeater[data-key="field_spm_contratto_storico"] .acf-row-handle { display:none !important; }
+	
+		  /* Aspetto "bloccato" per Select2 */
+		  .select2.spm-lock .select2-selection { 
+			background: #f6f7f7 !important; 
+			cursor: not-allowed !important; 
+			opacity: .9;
+		  }
+		  /* Aspetto "bloccato" per select native */
+		  select.spm-lock {
+			background: #f6f7f7 !important;
+			cursor: not-allowed !important;
+			opacity: .9;
+		  }
+		  /* Nasconde la colonna "Utente" nel repeater storico */
+			.acf-field-repeater[data-key="field_spm_contratto_storico"] 
+			  table.acf-table th[data-name="utente"],
+			.acf-field-repeater[data-key="field_spm_contratto_storico"] 
+			  table.acf-table td[data-name="utente"] {
+				display: none !important;
+			}
+		</style>
+		<?php
+	});
+
+	
 }
