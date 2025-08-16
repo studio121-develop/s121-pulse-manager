@@ -97,6 +97,7 @@ class SPM_Contract_Handler {
 		// Metabox azioni
 		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
 		add_action('add_meta_boxes_contratti', [__CLASS__, 'add_action_metabox']);
+		add_action('do_meta_boxes', function() {remove_meta_box('submitdiv', 'contratti', 'side');});
 		
 		// Nascondi/lock pulsante Aggiorna (Classic + Gutenberg) quando cessato
 		add_action('admin_head-post.php', [__CLASS__, 'admin_head_hide_update_for_cessati']);
@@ -777,45 +778,63 @@ class SPM_Contract_Handler {
 
 	 // Cambia la firma per ricevere $post
 	 public static function add_action_metabox($post) {
-		 $status = get_post_status($post);
-		 if (!$post || !$post->ID || in_array($status, ['auto-draft','draft'])) {
-			 return; // non aggiungere la metabox in creazione
-		 }
+		 //versione precedente, nasconva custom metabox se il contratto doveva ancora essere creato
+		 // $status = get_post_status($post);
+		 // if (!$post || !$post->ID || in_array($status, ['auto-draft','draft'])) {
+			//  return; // non aggiungere la metabox in creazione
+		 // }
 	 
-		 add_meta_box(
+	 	add_meta_box(
 			 'spm_contract_actions',
-			 '⚡ Azioni Rapide',
+			 '⚡ Azioni Contratto',
 			 [__CLASS__, 'render_action_metabox'],
 			 'contratti',
 			 'side',
 			 'high'
 		 );
 	 }
+	 	 
 	
 	public static function render_action_metabox($post) {
-		
 		$status = get_post_status($post);
-		if (!$post || !$post->ID || in_array($status, ['auto-draft','draft'])) {
-			echo '<div style="background:#f9f9f9;padding:10px;border-left:4px solid #777;">
-					Salva il contratto per abilitare le azioni.
-				  </div>';
+	
+		// Caso 1: contratto nuovo (draft / auto-draft)
+		if (in_array($status, ['auto-draft','draft'])) {
+			?>
+			<div id="spm-actions-box">
+				<p>
+					<button type="button" class="button button-primary button-large"
+						onclick="jQuery('#publish').trigger('click');">
+						💾 Salva Contratto
+					</button>
+				</p>
+				<div style="background:#f9f9f9;padding:10px;border-left:4px solid #777;">
+					Dopo il primo salvataggio saranno disponibili le azioni rapide.
+				</div>
+			</div>
+			<?php
 			return;
 		}
+	
+		// Caso 2: contratto già salvato
 		$stato     = get_field('stato', $post->ID);
 		$scadenza  = get_field('data_prossima_scadenza', $post->ID);
-		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : 999;
-	
-		// Calcolo giorni dalla scadenza per la logica "oltre soglia"
+		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : null;
 		$days_since   = $scadenza ? SPM_Date_Helper::days_since_due($scadenza) : null;
 		$oltre_soglia = ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI);
 		?>
 		<div id="spm-actions-box">
-			<!-- Info stato -->
+			<!-- Pulsante Salva -->
+			<p>
+				<button type="button" class="button button-primary button-large"
+					onclick="document.getElementById('post').submit();">
+					💾 Salva Contratto
+				</button>
+			</p>
+	
+			<!-- Info -->
 			<div style="background: #f9f9f9; padding: 10px; margin-bottom: 15px; border-left: 4px solid #0073aa;">
-				<?php
-				$stato_label = $stato !== null && $stato !== '' ? ucfirst((string)$stato) : '—';
-				?>
-				<strong>Stato:</strong> <?php echo esc_html($stato_label); ?><br>
+				<strong>Stato:</strong> <?php echo esc_html($stato ?: '—'); ?><br>
 				<?php if ($scadenza): ?>
 					<strong>Scadenza:</strong> <?php echo SPM_Date_Helper::to_display_format($scadenza); ?><br>
 					<strong>Giorni mancanti:</strong> <?php echo $giorni_mancanti; ?>
@@ -824,29 +843,32 @@ class SPM_Contract_Handler {
 	
 			<!-- Azioni -->
 			<?php if ($stato !== 'cessato'): ?>
-				<?php if ($oltre_soglia): ?>
-					<div style="background:#fff3f3;border-left:4px solid #dc3232;padding:8px;margin-bottom:10px;">
-						Questo contratto è scaduto da <?php echo (int)$days_since; ?> giorni (oltre soglia).
-						Verrà marcato <strong>cessato</strong> automaticamente; rinnovo non consentito.
-					</div>
-				<?php else: ?>
+				<?php if ($stato === 'attivo'): ?>
+					<?php if ($oltre_soglia): ?>
+						<div style="background:#fff3f3;border-left:4px solid #dc3232;padding:8px;margin-bottom:10px;">
+							Scaduto da <?php echo (int)$days_since; ?> giorni (oltre soglia).
+							Verrà marcato <strong>cessato</strong> automaticamente; rinnovo non consentito.
+						</div>
+					<?php else: ?>
+						<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo $post->ID; ?>">
+							🔄 Rinnova Contratto
+						</button></p>
+					<?php endif; ?>
+					<p><button class="button spm-action" data-action="sospendi" data-id="<?php echo $post->ID; ?>">
+						⏸️ Sospendi
+					</button></p>
+	
+				<?php elseif ($stato === 'scaduto' && !$oltre_soglia): ?>
 					<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo $post->ID; ?>">
 						🔄 Rinnova Contratto
 					</button></p>
+	
+				<?php elseif ($stato === 'sospeso'): ?>
+					<p><button class="button button-primary spm-action" data-action="riattiva" data-id="<?php echo $post->ID; ?>">
+						▶️ Riattiva
+					</button></p>
 				<?php endif; ?>
-			<?php endif; ?>
 	
-			<?php if ($stato === 'attivo'): ?>
-				<p><button class="button spm-action" data-action="sospendi" data-id="<?php echo $post->ID; ?>">
-					⏸️ Sospendi
-				</button></p>
-			<?php elseif ($stato === 'sospeso'): ?>
-				<p><button class="button spm-action" data-action="riattiva" data-id="<?php echo $post->ID; ?>">
-					▶️ Riattiva
-				</button></p>
-			<?php endif; ?>
-	
-			<?php if ($stato !== 'cessato'): ?>
 				<hr>
 				<p><button class="button spm-action" data-action="cessa" data-id="<?php echo $post->ID; ?>"
 					onclick="return confirm('Cessare definitivamente il contratto?');">
@@ -888,6 +910,9 @@ class SPM_Contract_Handler {
 		</script>
 		<?php
 	}
+
+
+
 
 	
 	/**
@@ -1300,7 +1325,7 @@ class SPM_Contract_Handler {
 		}
 		self::touch_servizio_stats($post_id);
 	}
-
+	
 
 
 }
