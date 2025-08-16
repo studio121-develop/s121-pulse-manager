@@ -69,6 +69,21 @@ class SPM_Contract_Handler {
 		
 		add_action('restrict_manage_posts', [__CLASS__, 'add_admin_filters']); // UI filtri
 		add_filter('parse_query', [__CLASS__, 'apply_admin_filters']);         // Logica filtri
+		
+		// --- LOCK UI ACF (cliente/servizio dopo creazione; stato se cessato)
+		add_filter('acf/prepare_field/name=cliente',  [__CLASS__, 'acf_lock_cliente']);
+		add_filter('acf/prepare_field/name=servizio', [__CLASS__, 'acf_lock_servizio']);
+		add_filter('acf/prepare_field/name=stato',    [__CLASS__, 'acf_lock_stato_if_cessato']);
+		add_action('admin_head',                      [__CLASS__, 'admin_css_locked_fields']);
+		
+		// --- ENFORCEMENT SERVER-SIDE (ignora modifiche non permesse)
+		add_filter('acf/update_value/name=cliente',   [__CLASS__, 'acf_enforce_cliente'], 10, 3);
+		add_filter('acf/update_value/name=servizio',  [__CLASS__, 'acf_enforce_servizio'], 10, 3);
+		add_filter('acf/update_value/name=stato',     [__CLASS__, 'acf_enforce_stato'],    10, 3);
+		
+		// --- Rimuovi "Modifica rapida" dalla lista (può bypassare ACF)
+		add_filter('post_row_actions',                [__CLASS__, 'remove_quick_edit'], 10, 2);
+
 
 		// Metabox azioni
 		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
@@ -1068,6 +1083,8 @@ class SPM_Contract_Handler {
 		echo '</select>';
 	}
 	
+	
+	
 	/**
 	 * Applica i filtri alla query principale della lista contratti.
 	 */
@@ -1141,6 +1158,105 @@ class SPM_Contract_Handler {
 		if (count($meta_query) > 1) {
 			$query->set('meta_query', $meta_query);
 		}
+	}
+
+	/* ================== LOCK UI (ACF) ================== */
+	
+	public static function acf_lock_cliente($field){
+		if (!is_admin()) return $field;
+		global $post;
+		if (!$post || $post->post_type !== 'contratti') return $field;
+	
+		$val = get_field('cliente', $post->ID);
+		$is_initialized = $post->post_status !== 'auto-draft' && !empty($val);
+	
+		if ($is_initialized) {
+			$field['readonly'] = 1;       // mantieni il valore nel POST
+			$field['disabled'] = 0;
+			$field['wrapper']['class'] = ($field['wrapper']['class'] ?? '').' spm-locked';
+			$field['instructions'] = trim(($field['instructions'] ?? '').' (bloccato dopo la creazione)');
+		}
+		return $field;
+	}
+	
+	public static function acf_lock_servizio($field){
+		if (!is_admin()) return $field;
+		global $post;
+		if (!$post || $post->post_type !== 'contratti') return $field;
+	
+		$val = get_field('servizio', $post->ID);
+		$is_initialized = $post->post_status !== 'auto-draft' && !empty($val);
+	
+		if ($is_initialized) {
+			$field['readonly'] = 1;
+			$field['disabled'] = 0;
+			$field['wrapper']['class'] = ($field['wrapper']['class'] ?? '').' spm-locked';
+			$field['instructions'] = trim(($field['instructions'] ?? '').' (bloccato dopo la creazione)');
+		}
+		return $field;
+	}
+	
+	public static function acf_lock_stato_if_cessato($field){
+		if (!is_admin()) return $field;
+		global $post;
+		if (!$post || $post->post_type !== 'contratti') return $field;
+	
+		$stato = get_field('stato', $post->ID);
+		if ($stato === 'cessato') {
+			$field['readonly'] = 1;  // non disabled, così il valore resta nel POST
+			$field['disabled'] = 0;
+			$field['wrapper']['class'] = ($field['wrapper']['class'] ?? '').' spm-locked';
+			$field['instructions'] = trim(($field['instructions'] ?? '').' ');
+		}
+		return $field;
+	}
+	
+	public static function admin_css_locked_fields(){
+		// Piccolo stile visivo per i campi bloccati
+		echo '<style>
+			.acf-field.spm-locked .acf-input select,
+			.acf-field.spm-locked .acf-input input[type="text"],
+			.acf-field.spm-locked .acf-input .select2-selection{
+				background:#f6f7f7 !important; pointer-events:none; opacity:.9; cursor:not-allowed;
+			}
+		</style>';
+	}
+	
+	
+	/* ============ ENFORCEMENT SERVER-SIDE (ACF) ============ */
+	
+	public static function acf_enforce_cliente($value, $post_id, $field){
+		$prev = get_field('cliente', $post_id, false);
+		if (!empty($prev)) {
+			return $prev; // già impostato: non cambiare
+		}
+		return $value;
+	}
+	
+	public static function acf_enforce_servizio($value, $post_id, $field){
+		$prev = get_field('servizio', $post_id, false);
+		if (!empty($prev)) {
+			return $prev; // già impostato: non cambiare
+		}
+		return $value;
+	}
+	
+	public static function acf_enforce_stato($value, $post_id, $field){
+		$prev = get_field('stato', $post_id, false);
+		if ($prev === 'cessato') {
+			return 'cessato'; // resta bloccato
+		}
+		return $value;
+	}
+	
+	
+	/* ============== Hardening lista (Quick Edit) ============== */
+	
+	public static function remove_quick_edit($actions, $post){
+		if ($post->post_type === 'contratti') {
+			unset($actions['inline hide-if-no-js']); // "Modifica rapida"
+		}
+		return $actions;
 	}
 
 
