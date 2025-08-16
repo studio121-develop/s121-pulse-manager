@@ -97,7 +97,20 @@ class SPM_Contract_Handler {
 		// Metabox azioni
 		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
 		add_action('add_meta_boxes_contratti', [__CLASS__, 'add_action_metabox']);
-		add_action('do_meta_boxes', function() {remove_meta_box('submitdiv', 'contratti', 'side');});
+		// add_action('do_meta_boxes', function() {remove_meta_box('submitdiv', 'contratti', 'side');});
+		add_action('admin_head-post.php', function(){
+		  global $post;
+		  if ($post && $post->post_type === 'contratti') {
+			echo '<style>#submitdiv{display:none!important;}</style>';
+		  }
+		});
+		add_action('admin_head-post-new.php', function(){
+		  $screen = get_current_screen();
+		  if ($screen && $screen->post_type === 'contratti') {
+			echo '<style>#submitdiv{display:none!important;}</style>';
+		  }
+		});
+		
 		
 		// Nascondi/lock pulsante Aggiorna (Classic + Gutenberg) quando cessato
 		add_action('admin_head-post.php', [__CLASS__, 'admin_head_hide_update_for_cessati']);
@@ -128,7 +141,19 @@ class SPM_Contract_Handler {
 				'2.0.0',
 				true
 			);
+			
+			wp_enqueue_script(
+				'spm-native-save',
+				plugin_dir_url(__FILE__) . '../assets/js/spm-native-save.js',
+				[], // nessuna dipendenza obbligatoria
+				'1.0.0',
+				true
+			);
+			
+			
 		}
+		
+		
 	}
 	
 	/**
@@ -804,9 +829,9 @@ class SPM_Contract_Handler {
 			<div id="spm-actions-box">
 				<p>
 					<button type="button" class="button button-primary button-large"
-						onclick="jQuery('#publish').trigger('click');">
+							  onclick="spmNativePrimaryClick()">
 						💾 Salva Contratto
-					</button>
+					 </button>
 				</p>
 				<div style="background:#f9f9f9;padding:10px;border-left:4px solid #777;">
 					Dopo il primo salvataggio saranno disponibili le azioni rapide.
@@ -824,13 +849,7 @@ class SPM_Contract_Handler {
 		$oltre_soglia = ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI);
 		?>
 		<div id="spm-actions-box">
-			<!-- Pulsante Salva -->
-			<p>
-				<button type="button" class="button button-primary button-large"
-					onclick="document.getElementById('post').submit();">
-					💾 Salva Contratto
-				</button>
-			</p>
+
 	
 			<!-- Info -->
 			<div style="background: #f9f9f9; padding: 10px; margin-bottom: 15px; border-left: 4px solid #0073aa;">
@@ -840,6 +859,13 @@ class SPM_Contract_Handler {
 					<strong>Giorni mancanti:</strong> <?php echo $giorni_mancanti; ?>
 				<?php endif; ?>
 			</div>
+			<!-- Pulsante Salva -->
+			<p>
+				<button type="button" class="button button-primary button-large"
+						  onclick="spmNativePrimaryClick()">
+					💾 Salva Contratto
+				  </button>
+			</p>
 	
 			<!-- Azioni -->
 			<?php if ($stato !== 'cessato'): ?>
