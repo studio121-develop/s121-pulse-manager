@@ -26,19 +26,7 @@ if (function_exists('acf_add_local_field_group')) {
 					'altro'           => 'Altro',
 				],
 				'ui' => 1,
-				'wrapper' => ['width' => '50'],
-			],
-
-			// Flag attivo/disattivo per visibilità nei contratti
-			[
-				'key' => 'field_spm_attivo',
-				'label' => 'Attivo',
-				'name' => 'attivo',
-				'type' => 'true_false',
-				'instructions' => 'Se disattivato, non sarà più selezionabile nei nuovi contratti',
-				'ui' => 1,
-				'default_value' => 1,
-				'wrapper' => ['width' => '50'],
+				'wrapper' => ['width' => '100'],
 			],
 
 			// Prezzo base proposto dal servizio
@@ -54,20 +42,41 @@ if (function_exists('acf_add_local_field_group')) {
 				'step' => 0.01,
 				'wrapper' => ['width' => '50'],
 			],
+			
+			// Cadenza Fatturazione predefinita
+			[
+				'key'           => 'field_spm_cadenza_fatturazione_default',
+				'label'         => 'Cadenza fatturazione',
+				'name'          => 'cadenza_fatturazione_default',
+				'type'          => 'select',
+				'choices'       => [
+					'mensile'         => 'Mensile',
+					'trimestrale'     => 'Trimestrale',
+					'quadrimestrale'  => 'Quadrimestrale',
+					'semestrale'      => 'Semestrale',
+					'annuale'         => 'Annuale',
+				],
+				'default_value' => 'mensile',
+				'required'      => 1,
+				'ui'            => 1,
+				'wrapper'       => ['width' => '33'],
+				'instructions'  => 'Ogni quanto emetti le fatture',
+			],
 
 			// Frequenza predefinita (usata per precompilazioni e reminder)
 			[
 				'key' => 'field_spm_ricorrenza',
-				'label' => 'Frequenza Ricorrenza',
+				'label' => 'Durata Contratto',
 				'name' => 'frequenza_ricorrenza',
 				'type' => 'select',
-				'instructions' => 'Periodicità di rinnovo e reminder suggerita',
+				'instructions' => 'Durata del contratto e periodicità di rinnovo',
 				'required' => 1,
 				'choices' => [
-					'mensile'     => 'Mensile',
-					'trimestrale' => 'Trimestrale',
-					'semestrale'  => 'Semestrale',
-					'annuale'     => 'Annuale',
+				'mensile'         => 'Mensile',
+				'trimestrale'     => 'Trimestrale',
+				'quadrimestrale'  => 'Quadrimestrale',
+				'semestrale'      => 'Semestrale',
+				'annuale'         => 'Annuale',
 				],
 				'default_value' => 'annuale',
 				'ui' => 1,
@@ -160,7 +169,7 @@ Studio 121',
 				'name' => 'count_contratti_attivi',
 				'type' => 'number',
 				'readonly' => 1,
-				'instructions' => 'Aggiornato automaticamente - Numero di contratti attivi con questo servizio',
+				'instructions' => 'Numero di contratti attivi con questo servizio',
 				'wrapper' => ['width' => '33'],
 			],
 
@@ -170,7 +179,7 @@ Studio 121',
 				'name' => 'ricavo_mensile_totale',
 				'type' => 'number',
 				'readonly' => 1,
-				'instructions' => 'Aggiornato automaticamente - Ricavo mensile ricorrente da questo servizio',
+				'instructions' => 'Ricavo mensile ricorrente da questo servizio',
 				'prepend' => '€',
 				'wrapper' => ['width' => '33'],
 			],
@@ -228,27 +237,25 @@ function spm_update_servizio_stats($post_id) {
 	$ricavo_mensile = 0;
 	if ($contratti_attivi->have_posts()) {
 		foreach ($contratti_attivi->posts as $contratto_id) {
+			// prezzo: tieni valido anche 0
 			$prezzo = get_field('prezzo_contratto', $contratto_id);
-			if (!$prezzo) {
-				$prezzo = get_field('prezzo_base', $post_id);
+			if ($prezzo === '' || $prezzo === null) {
+			  $prezzo = get_field('prezzo_base', $post_id);
 			}
-
-			$frequenza = get_field('frequenza', $contratto_id);
-
-			// Converti a base mensile
-			switch ($frequenza) {
-				case 'mensile':
-					$ricavo_mensile += $prezzo;
-					break;
-				case 'trimestrale':
-					$ricavo_mensile += ($prezzo / 3);
-					break;
-				case 'semestrale':
-					$ricavo_mensile += ($prezzo / 6);
-					break;
-				case 'annuale':
-					$ricavo_mensile += ($prezzo / 12);
-					break;
+			
+			// cadenza fatturazione: prima dal contratto, poi default dal servizio
+			$cadenza = get_field('cadenza_fatturazione', $contratto_id);
+			if ($cadenza === '' || $cadenza === null) {
+			  $cadenza = get_field('cadenza_fatturazione_default', $post_id);
+			}
+			
+			switch ($cadenza) {
+			  case 'mensile':        $ricavo_mensile += $prezzo;       break;
+			  case 'trimestrale':    $ricavo_mensile += $prezzo / 3;   break;
+			  case 'quadrimestrale': $ricavo_mensile += $prezzo / 4;   break; // NEW
+			  case 'semestrale':     $ricavo_mensile += $prezzo / 6;   break;
+			  case 'annuale':        $ricavo_mensile += $prezzo / 12;  break;
+			  default:               $ricavo_mensile += $prezzo / 12;  break; // fallback
 			}
 		}
 	}

@@ -78,6 +78,9 @@ class SPM_Date_Helper {
 			case 'trimestrale':
 				$dt->modify('+3 months');
 				break;
+			case 'quadrimestrale':
+				$dt->modify('+4 months');
+				break;
 			case 'semestrale':
 				$dt->modify('+6 months');
 				break;

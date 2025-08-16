@@ -4,6 +4,7 @@
   // Cache elementi DOM
   let $servizioField, $prezzoField, $frequenzaField, $rinnovoField, $reminderField, $noteField, $dataAttivazione, $dataScadenza;
   let $previewAttivazione, $previewFrequenza, $previewScadenza;
+  let $cadenzaField; // NEW: cadenza fatturazione
 
   /**
    * Calcola e aggiorna l'anteprima della data di scadenza
@@ -50,20 +51,12 @@
     if (isNaN(date.getTime())) return null;
 
     switch (frequenza) {
-      case 'mensile':
-        date.setMonth(date.getMonth() + 1);
-        break;
-      case 'trimestrale':
-        date.setMonth(date.getMonth() + 3);
-        break;
-      case 'semestrale':
-        date.setMonth(date.getMonth() + 6);
-        break;
-      case 'annuale':
-        date.setFullYear(date.getFullYear() + 1);
-        break;
-      default:
-        return null;
+      case 'mensile':        date.setMonth(date.getMonth() + 1); break;
+      case 'trimestrale':    date.setMonth(date.getMonth() + 3); break;
+      case 'quadrimestrale': date.setMonth(date.getMonth() + 4); break; // NEW
+      case 'semestrale':     date.setMonth(date.getMonth() + 6); break;
+      case 'annuale':        date.setFullYear(date.getFullYear() + 1); break;
+      default: return null;
     }
 
     return date.toISOString().split('T')[0];
@@ -90,7 +83,8 @@
   function getFrequenzaLabel(frequenza) {
     const labels = {
       'mensile': 'Mensile',
-      'trimestrale': 'Trimestrale', 
+      'trimestrale': 'Trimestrale',
+      'quadrimestrale': 'Quadrimestrale', // NEW
       'semestrale': 'Semestrale',
       'annuale': 'Annuale'
     };
@@ -131,10 +125,16 @@
             $prezzoField.val(data.prezzo_base);
           }
 
-         if ($frequenzaField && data.frequenza_ricorrenza !== undefined) {
+          if ($frequenzaField && data.frequenza_ricorrenza !== undefined) {
             $frequenzaField.$input().val(data.frequenza_ricorrenza).trigger('change');
-             console.log('📅 Frequenza FORZATA a:', data.frequenza_ricorrenza);
-         }
+            console.log('📅 Frequenza FORZATA a:', data.frequenza_ricorrenza);
+          }
+
+          // NEW: cadenza fatture dal servizio (se presente e il campo è vuoto)
+          if ($cadenzaField && !$cadenzaField.val() && data.cadenza_fatturazione_default !== undefined) {
+            $cadenzaField.$input().val(data.cadenza_fatturazione_default).trigger('change');
+            console.log('🧾 Cadenza fatture impostata da servizio:', data.cadenza_fatturazione_default);
+          }
 
           if ($reminderField && !$reminderField.val() && data.giorni_pre_reminder !== undefined) {
             $reminderField.val(data.giorni_pre_reminder);
@@ -197,39 +197,35 @@
    */
   function inizializzaCampi() {
     // Cache campi ACF
-    $servizioField = acf.getField('field_spm_contratto_servizio');
-    $prezzoField = acf.getField('field_spm_contratto_prezzo');
-    $frequenzaField = acf.getField('field_spm_contratto_frequenza');
-    $rinnovoField = acf.getField('field_spm_contratto_rinnovo_auto');
-    $reminderField = acf.getField('field_spm_contratto_giorni_preavviso');
-    $noteField = acf.getField('field_spm_contratto_note');
+    $servizioField   = acf.getField('field_spm_contratto_servizio');
+    $prezzoField     = acf.getField('field_spm_contratto_prezzo');
+    $frequenzaField  = acf.getField('field_spm_contratto_frequenza');
+    $rinnovoField    = acf.getField('field_spm_contratto_rinnovo_auto');
+    $reminderField   = acf.getField('field_spm_contratto_giorni_preavviso');
+    $noteField       = acf.getField('field_spm_contratto_note');
     $dataAttivazione = acf.getField('field_spm_contratto_data_attivazione');
-    $dataScadenza = acf.getField('field_spm_contratto_data_scadenza');
+    $dataScadenza    = acf.getField('field_spm_contratto_data_scadenza');
+
+    // NEW: cadenza fatturazione (campo contratto)
+    $cadenzaField    = acf.getField('field_spm_contratto_cadenza_fatturazione');
 
     // Cache elementi anteprima
     $previewAttivazione = $('#preview-attivazione');
-    $previewFrequenza = $('#preview-frequenza');
-    $previewScadenza = $('#preview-scadenza');
+    $previewFrequenza   = $('#preview-frequenza');
+    $previewScadenza    = $('#preview-scadenza');
 
     // Imposta data scadenza come readonly
     impostaDataScadenzaReadonly();
 
     // Eventi per ricalcolo automatico
-    if ($dataAttivazione) {
-      $dataAttivazione.$input().on('change', aggiornaAnteprimaScadenza);
-    }
-
-    if ($frequenzaField) {
-     $frequenzaField.$input().on('change', aggiornaAnteprimaScadenza);
-    }
+    if ($dataAttivazione) $dataAttivazione.$input().on('change', aggiornaAnteprimaScadenza);
+    if ($frequenzaField)  $frequenzaField.$input().on('change', aggiornaAnteprimaScadenza);
 
     // Evento cambio servizio
     if ($servizioField) {
       $servizioField.on('change', function() {
         const servizioID = $servizioField.val();
-        if (servizioID) {
-          precompilaFromServizio(servizioID);
-        }
+        if (servizioID) precompilaFromServizio(servizioID);
       });
     }
 
@@ -242,7 +238,11 @@
       const $postId = $('#post_ID');
       const isNewPost = !$postId.length || $postId.val() === '0';
       
-      if (isNewPost && servizioID && (!$prezzoField || !$prezzoField.val() || !$frequenzaField || !$frequenzaField.val())) {
+      if (isNewPost && servizioID && (
+          !$prezzoField || !$prezzoField.val() || 
+          !$frequenzaField || !$frequenzaField.val() ||
+          !$cadenzaField || !$cadenzaField.val()
+        )) {
         precompilaFromServizio(servizioID);
       }
     }, 500);
@@ -253,6 +253,6 @@
   acf.addAction('append', inizializzaCampi); // Per repeater fields
 
   // Debug info
-  console.log('🔧 ACF Dynamic Values Script caricato - Versione 2.1.0');
+  console.log('🔧 ACF Dynamic Values Script caricato - Versione 2.2.0');
 
 })(jQuery);

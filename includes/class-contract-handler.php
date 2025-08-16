@@ -84,6 +84,15 @@ class SPM_Contract_Handler {
 		// --- Rimuovi "Modifica rapida" dalla lista (può bypassare ACF)
 		add_filter('post_row_actions',                [__CLASS__, 'remove_quick_edit'], 10, 2);
 
+		add_action('wp_trash_post',      [__CLASS__, 'on_trash_untrash_delete']);
+		add_action('untrash_post',       [__CLASS__, 'on_trash_untrash_delete']);
+		add_action('before_delete_post', [__CLASS__, 'on_trash_untrash_delete']);
+		
+		// --- SYNC STATS SERVIZI (trash / untrash / delete contratti)
+		add_action('wp_trash_post',       [__CLASS__, 'on_trash_untrash_delete']);  // cestina contratto → aggiorna stats servizio
+		add_action('untrash_post',        [__CLASS__, 'on_trash_untrash_delete']);  // ripristina contratto → aggiorna stats servizio
+		add_action('before_delete_post',  [__CLASS__, 'on_trash_untrash_delete']);  // elimina definitivamente → aggiorna stats servizio
+
 
 		// Metabox azioni
 		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
@@ -138,6 +147,7 @@ class SPM_Contract_Handler {
 		// Recupera dati servizio
 		$data = [
 			'prezzo_base' => get_field('prezzo_base', $servizio_id),
+			'cadenza_fatturazione_default' => get_field('cadenza_fatturazione_default', $servizio_id),
 			'frequenza_ricorrenza' => get_field('frequenza_ricorrenza', $servizio_id),
 			'giorni_pre_reminder' => get_field('giorni_pre_reminder', $servizio_id),
 			'descrizione_admin' => get_field('descrizione_admin', $servizio_id),
@@ -163,7 +173,7 @@ class SPM_Contract_Handler {
 		if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
 			return;
 		}
-	
+		
 		self::$is_saving = true;
 	
 		// 1) Normalizza date
@@ -191,8 +201,15 @@ class SPM_Contract_Handler {
 		if (!$is_first_log) {
 			self::log_operazione($post_id, 'modifica', null, 'Contratto modificato');
 		}
-	
+		self::touch_servizio_stats($post_id);
 		self::$is_saving = false;
+	}
+	
+	private static function touch_servizio_stats($contract_id){
+		$servizio_id = get_field('servizio', $contract_id);
+		if ($servizio_id && function_exists('spm_update_servizio_stats')) {
+			spm_update_servizio_stats($servizio_id);
+		}
 	}
 
 	
@@ -357,6 +374,7 @@ class SPM_Contract_Handler {
 		if ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
 			update_field('stato', 'cessato', $post_id);
 			self::log_operazione($post_id, 'cessazione', 0, "Blocco rinnovo: scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ").");
+			self::touch_servizio_stats($post_id);
 			return ['success' => false, 'message' => 'Contratto scaduto da troppo tempo: considerato cessato. Non rinnovabile.'];
 		}
 
@@ -381,6 +399,8 @@ class SPM_Contract_Handler {
 				'Rinnovo di 1 periodo. Nuova scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
 			);
 			
+			self::touch_servizio_stats($post_id);
+			
 			return [
 				'success' => true, 
 				'message' => 'Contratto rinnovato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
@@ -400,7 +420,8 @@ class SPM_Contract_Handler {
 				$importo,
 				sprintf('Allineamento in ritardo: +%d periodi. Nuova scadenza: %s', max(1, (int)$steps), SPM_Date_Helper::to_display_format($nuova_scadenza))
 			);
-			
+			self::touch_servizio_stats($post_id);
+
 			return [
 				'success' => true, 
 				'message' => 'Contratto allineato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
@@ -418,9 +439,8 @@ class SPM_Contract_Handler {
 		$stato_precedente = get_field('stato', $post_id);
 		
 		update_field('stato', 'sospeso', $post_id);
-		
 		self::log_operazione($post_id, 'sospensione', null, "Contratto sospeso (era: $stato_precedente)");
-		
+		self::touch_servizio_stats($post_id);
 		return ['success' => true, 'message' => 'Contratto sospeso con successo'];
 	}
 	
@@ -436,7 +456,7 @@ class SPM_Contract_Handler {
 		update_field('stato', $nuovo_stato, $post_id);
 		
 		self::log_operazione($post_id, 'riattivazione', null, "Contratto riattivato con stato: $nuovo_stato");
-		
+		self::touch_servizio_stats($post_id);
 		return ['success' => true, 'message' => "Contratto riattivato (stato: $nuovo_stato)"];
 	}
 	
@@ -449,7 +469,7 @@ class SPM_Contract_Handler {
 		update_field('stato', 'cessato', $post_id);
 		
 		self::log_operazione($post_id, 'cessazione', null, "Contratto cessato definitivamente (era: $stato_precedente)");
-		
+		self::touch_servizio_stats($post_id);
 		return ['success' => true, 'message' => 'Contratto cessato definitivamente'];
 	}
 	
@@ -502,6 +522,7 @@ class SPM_Contract_Handler {
 							'Stato aggiornato automaticamente da controllo giornaliero'
 						);
 					}
+					self::touch_servizio_stats($post->ID);
 				}
 				
 			}
@@ -555,6 +576,7 @@ class SPM_Contract_Handler {
 						0,
 						"Auto-cessazione (cron): scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ")."
 					);
+					self::touch_servizio_stats($post->ID);
 					continue; // passa al prossimo contratto
 				}
 			
@@ -563,6 +585,7 @@ class SPM_Contract_Handler {
 			
 				update_field('data_prossima_scadenza', $nuova_scadenza, $post->ID);
 				update_field('stato', 'attivo', $post->ID);
+				self::touch_servizio_stats($post->ID);
 			
 				// importo robusto
 				$importo = get_field('prezzo_contratto', $post->ID);
@@ -698,6 +721,7 @@ class SPM_Contract_Handler {
 			$map  = [
 				'mensile'     => 'Mensile',
 				'trimestrale' => 'Trimestrale',
+				'quadrimestrale' => 'Quadrimestrale',
 				'semestrale'  => 'Semestrale',
 				'annuale'     => 'Annuale',
 			];
@@ -1049,6 +1073,7 @@ class SPM_Contract_Handler {
 			''             => 'Tutte le frequenze',
 			'mensile'      => 'Mensile',
 			'trimestrale'  => 'Trimestrale',
+			'quadrimestrale'  => 'Quadrimestrale',
 			'semestrale'   => 'Semestrale',
 			'annuale'      => 'Annuale',
 		];
@@ -1258,6 +1283,24 @@ class SPM_Contract_Handler {
 		}
 		return $actions;
 	}
+	
+	/**
+	 * Mantiene sincronizzate le statistiche del "servizio" quando
+	 * un CONTRATTO cambia “stato di esistenza” a livello di post:
+	 * - spostato nel cestino (wp_trash_post)
+	 * - ripristinato dal cestino (untrash_post)
+	 * - eliminato definitivamente (before_delete_post)
+	 *
+	 * In tutti i casi ricalcola le stats del servizio collegato.
+	 */
+	public static function on_trash_untrash_delete($post_id){
+		// Esegui solo per il CPT "contratti"
+		if (get_post_type($post_id) !== 'contratti') {
+			return;
+		}
+		self::touch_servizio_stats($post_id);
+	}
+
 
 
 }

@@ -1,266 +1,481 @@
 /**
- * S121 Pulse Manager - Admin Styles
- * Stili per il backend del plugin
+ * S121 Pulse Manager - SaaS Style Admin Interface
+ * Design moderno per l'interfaccia amministrativa
  */
 
 /* ==========================================================================
-   GENERAL ADMIN STYLES
+   VARIABILI CSS
    ========================================================================== */
-
-.spm-admin-notice {
-  border-left: 4px solid #0073aa;
-  padding: 1px 12px;
-  background: #fff;
-  box-shadow: 0 1px 1px rgba(0,0,0,.04);
-}
-
-.spm-admin-notice.warning {
-  border-left-color: #ffba00;
-}
-
-.spm-admin-notice.error {
-  border-left-color: #dc3232;
-}
-
-.spm-admin-notice.success {
-  border-left-color: #00a32a;
+:root {
+  --spm-primary: #2563eb;
+  --spm-primary-hover: #1d4ed8;
+  --spm-secondary: #64748b;
+  --spm-success: #10b981;
+  --spm-warning: #f59e0b;
+  --spm-error: #ef4444;
+  --spm-gray-50: #f8fafc;
+  --spm-gray-100: #f1f5f9;
+  --spm-gray-200: #e2e8f0;
+  --smp-gray-300: #cbd5e1;
+  --spm-gray-500: #64748b;
+  --spm-gray-700: #334155;
+  --spm-gray-900: #0f172a;
+  --spm-border-radius: 8px;
+  --spm-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --spm-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --spm-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 /* ==========================================================================
-   CONTRATTI - EDIT SCREEN
+   LAYOUT PRINCIPALE
    ========================================================================== */
 
-/* Anteprima calcolo scadenza */
-#spm-scadenza-preview {
-  padding: 15px;
-  background: #f0f8ff;
-  border-left: 4px solid #0073aa;
-  margin: 10px 0;
-  border-radius: 3px;
+.spm-saas-wrapper {
+  background: var(--spm-gray-50);
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-#spm-scadenza-preview strong {
-  color: #0073aa;
-}
-
-/* Campo data scadenza readonly */
-.acf-field[data-name="data_prossima_scadenza"] .acf-input input[readonly] {
-  background: #f9f9f9 !important;
-  color: #666 !important;
-  cursor: not-allowed !important;
-  border: 1px solid #ddd !important;
-}
-
-.acf-field[data-name="data_prossima_scadenza"] .acf-input input[readonly]:focus {
-  box-shadow: none !important;
-}
-
-/* Storico contratto - styling della tabella */
-.acf-repeater .acf-table {
-  border-collapse: collapse;
-  width: 100%;
-}
-
-.acf-repeater .acf-table th,
-.acf-repeater .acf-table td {
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  font-size: 13px;
-}
-
-.acf-repeater .acf-table th {
-  background: #f1f1f1;
-  font-weight: 600;
-}
-
-/* Colori per tipi operazione */
-.acf-repeater .acf-table td[data-name="tipo_operazione"] select option[value="creazione"] {
-  background: #e7f7ee;
-}
-
-.acf-repeater .acf-table td[data-name="tipo_operazione"] select option[value="rinnovo_automatico"],
-.acf-repeater .acf-table td[data-name="tipo_operazione"] select option[value="rinnovo_manuale"] {
-  background: #fff8dc;
-}
-
-.acf-repeater .acf-table td[data-name="tipo_operazione"] select option[value="sospensione"] {
-  background: #fff3cd;
-}
-
-.acf-repeater .acf-table td[data-name="tipo_operazione"] select option[value="cessazione"] {
-  background: #f8d7da;
-}
-
-/* ==========================================================================
-   CONTRATTI - LIST TABLE
-   ========================================================================== */
-
-/* Colonne personalizzate */
-.wp-list-table .column-cliente,
-.wp-list-table .column-servizio {
-  width: 20%;
-}
-
-.wp-list-table .column-scadenza {
-  width: 15%;
-}
-
-.wp-list-table .column-stato {
-  width: 12%;
-}
-
-.wp-list-table .column-azioni {
-  width: 15%;
-}
-
-/* Bottoni azioni inline */
-.spm-action {
-  margin-right: 5px !important;
-  font-size: 11px !important;
-  padding: 3px 8px !important;
-  height: auto !important;
-  line-height: 1.3 !important;
-}
-
-.spm-action:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/* Stato contratti - icone colorate */
-.wp-list-table .column-stato span {
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.wp-list-table .column-scadenza span {
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-/* ==========================================================================
-   DASHBOARD CONTRATTI
-   ========================================================================== */
-
-/* Card statistiche */
-.spm-stats-grid {
+.spm-saas-header {
+  background: white;
+  border-bottom: 1px solid var(--spm-gray-200);
+  padding: 1rem 2rem;
   display: flex;
-  gap: 20px;
-  margin: 20px 0;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: var(--spm-shadow-sm);
 }
+
+.spm-saas-header h1 {
+  margin: 0;
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: var(--spm-gray-900);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.spm-saas-header .spm-logo {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, var(--spm-primary), var(--spm-primary-hover));
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.spm-saas-content {
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* ==========================================================================
+   CARD SYSTEM
+   ========================================================================== */
+
+.spm-card {
+  background: white;
+  border-radius: var(--spm-border-radius);
+  box-shadow: var(--spm-shadow);
+  border: 1px solid var(--spm-gray-200);
+  overflow: hidden;
+}
+
+.spm-card-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--spm-gray-200);
+  background: var(--spm-gray-50);
+}
+
+.spm-card-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--spm-gray-900);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.spm-card-body {
+  padding: 1.5rem;
+}
+
+.spm-card-footer {
+  padding: 1rem 1.5rem;
+  background: var(--spm-gray-50);
+  border-top: 1px solid var(--spm-gray-200);
+}
+
+/* ==========================================================================
+   GRID SYSTEM
+   ========================================================================== */
+
+.spm-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.spm-grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.spm-grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.spm-grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 1024px) {
+  .spm-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .spm-grid-2,
+  .spm-grid-3,
+  .spm-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   STATISTICHE CARDS
+   ========================================================================== */
 
 .spm-stat-card {
-  flex: 1;
-  min-width: 200px;
   background: white;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  border-radius: 3px;
-  border-left: 4px solid #0073aa;
+  border-radius: var(--spm-border-radius);
+  padding: 1.5rem;
+  box-shadow: var(--spm-shadow);
+  border: 1px solid var(--spm-gray-200);
+  position: relative;
+  overflow: hidden;
 }
 
-.spm-stat-card.green {
-  border-left-color: #00a32a;
+.spm-stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--accent-color, var(--spm-primary));
 }
 
-.spm-stat-card.yellow {
-  border-left-color: #dba617;
+.spm-stat-card.success::before {
+  --accent-color: var(--spm-success);
 }
 
-.spm-stat-card.red {
-  border-left-color: #dc3232;
+.spm-stat-card.warning::before {
+  --accent-color: var(--spm-warning);
 }
 
-.spm-stat-card h3 {
-  margin-top: 0;
-  color: #333;
-  font-size: 16px;
+.spm-stat-card.error::before {
+  --accent-color: var(--spm-error);
+}
+
+.spm-stat-card .spm-stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  background: var(--accent-color, var(--spm-primary));
+  color: white;
+}
+
+.spm-stat-card.success .spm-stat-icon {
+  background: var(--spm-success);
+}
+
+.spm-stat-card.warning .spm-stat-icon {
+  background: var(--spm-warning);
+}
+
+.spm-stat-card.error .spm-stat-icon {
+  background: var(--spm-error);
 }
 
 .spm-stat-number {
-  font-size: 32px;
-  font-weight: bold;
-  margin: 10px 0;
+  font-size: 2.25rem;
+  font-weight: 700;
   line-height: 1;
+  color: var(--spm-gray-900);
+  margin-bottom: 0.25rem;
 }
 
 .spm-stat-label {
-  color: #666;
-  margin: 0;
-  font-size: 13px;
+  color: var(--spm-gray-500);
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
-/* Tabelle dashboard */
-.spm-dashboard-table {
-  background: white;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  border-radius: 3px;
+.spm-stat-change {
+  margin-top: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
-.spm-dashboard-table h2 {
-  margin-top: 0;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #eee;
+.spm-stat-change.positive {
+  color: var(--spm-success);
+}
+
+.spm-stat-change.negative {
+  color: var(--spm-error);
 }
 
 /* ==========================================================================
-   METABOX AZIONI
+   BUTTONS
    ========================================================================== */
 
-#spm-actions-box {
-  padding: 0;
+.spm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border-radius: var(--spm-border-radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  line-height: 1.25;
 }
 
-#spm-actions-box .button {
+.spm-btn-primary {
+  background: var(--spm-primary);
+  color: white;
+  border-color: var(--spm-primary);
+}
+
+.spm-btn-primary:hover {
+  background: var(--spm-primary-hover);
+  border-color: var(--spm-primary-hover);
+  color: white;
+}
+
+.spm-btn-secondary {
+  background: white;
+  color: var(--spm-gray-700);
+  border-color: var(--spm-gray-300);
+}
+
+.spm-btn-secondary:hover {
+  background: var(--spm-gray-50);
+  color: var(--spm-gray-900);
+}
+
+.spm-btn-success {
+  background: var(--spm-success);
+  color: white;
+  border-color: var(--spm-success);
+}
+
+.spm-btn-warning {
+  background: var(--spm-warning);
+  color: white;
+  border-color: var(--spm-warning);
+}
+
+.spm-btn-error {
+  background: var(--spm-error);
+  color: white;
+  border-color: var(--spm-error);
+}
+
+.spm-btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.spm-btn-lg {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+}
+
+/* ==========================================================================
+   TABLES
+   ========================================================================== */
+
+.spm-table-wrapper {
+  background: white;
+  border-radius: var(--spm-border-radius);
+  box-shadow: var(--spm-shadow);
+  border: 1px solid var(--spm-gray-200);
+  overflow: hidden;
+}
+
+.spm-table {
   width: 100%;
-  margin-bottom: 8px;
-  text-align: center;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.spm-table th {
+  background: var(--spm-gray-50);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--spm-gray-700);
+  border-bottom: 1px solid var(--spm-gray-200);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.spm-table td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--spm-gray-200);
+  color: var(--spm-gray-900);
+}
+
+.spm-table tbody tr:hover {
+  background: var(--spm-gray-50);
+}
+
+.spm-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ==========================================================================
+   STATUS BADGES
+   ========================================================================== */
+
+.spm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.spm-badge-success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.spm-badge-warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.spm-badge-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.spm-badge-gray {
+  background: var(--spm-gray-100);
+  color: var(--spm-gray-700);
+}
+
+.spm-badge-primary {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+/* ==========================================================================
+   PROGRESS BAR
+   ========================================================================== */
+
+.spm-progress {
+  width: 100%;
+  height: 8px;
+  background: var(--spm-gray-200);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.spm-progress-bar {
+  height: 100%;
+  background: var(--spm-primary);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.spm-progress-bar.success {
+  background: var(--spm-success);
+}
+
+.spm-progress-bar.warning {
+  background: var(--spm-warning);
+}
+
+.spm-progress-bar.error {
+  background: var(--spm-error);
+}
+
+/* ==========================================================================
+   CHARTS PLACEHOLDER
+   ========================================================================== */
+
+.spm-chart-container {
+  background: white;
+  border-radius: var(--spm-border-radius);
+  padding: 1.5rem;
+  box-shadow: var(--spm-shadow);
+  border: 1px solid var(--spm-gray-200);
+  min-height: 300px;
+  display: flex;
+  align-items: center;
   justify-content: center;
 }
 
-#spm-actions-box .button:last-child {
-  margin-bottom: 0;
-}
-
-#spm-actions-box hr {
-  margin: 15px 0;
-  border: none;
-  border-top: 1px solid #eee;
-}
-
-/* Info box stato contratto */
-.spm-contract-info {
-  background: #f9f9f9;
-  padding: 10px;
-  margin-bottom: 15px;
-  border-left: 4px solid #0073aa;
-  border-radius: 3px;
-  font-size: 13px;
-}
-
-.spm-contract-info strong {
-  color: #333;
+.spm-chart-placeholder {
+  text-align: center;
+  color: var(--spm-gray-500);
 }
 
 /* ==========================================================================
-   SERVIZI - EDIT SCREEN
+   NOTIFICATIONS
    ========================================================================== */
 
-/* Statistiche servizio */
-.acf-field[data-name="count_contratti_attivi"] .acf-input,
-.acf-field[data-name="ricavo_mensile_totale"] .acf-input,
-.acf-field[data-name="ultimo_aggiornamento_stats"] .acf-input {
-  background: #f9f9f9;
+.spm-notification {
+  padding: 1rem;
+  border-radius: var(--spm-border-radius);
+  border: 1px solid;
+  margin-bottom: 1rem;
 }
 
-.acf-field[data-name="count_contratti_attivi"] input,
-.acf-field[data-name="ricavo_mensile_totale"] input,
-.acf-field[data-name="ultimo_aggiornamento_stats"] input {
-  background: #f9f9f9 !important;
-  color: #666 !important;
-  cursor: not-allowed !important;
+.spm-notification-success {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.spm-notification-warning {
+  background: #fffbeb;
+  border-color: #fed7aa;
+  color: #92400e;
+}
+
+.spm-notification-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.spm-notification-info {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e40af;
 }
 
 /* ==========================================================================
@@ -268,71 +483,44 @@
    ========================================================================== */
 
 @media (max-width: 768px) {
-  .spm-stats-grid {
-	flex-direction: column;
+  .spm-saas-header {
+    padding: 1rem;
+  }
+  
+  .spm-saas-content {
+    padding: 1rem;
+  }
+  
+  .spm-card-header,
+  .spm-card-body {
+    padding: 1rem;
   }
   
   .spm-stat-card {
-	min-width: auto;
+    padding: 1rem;
   }
   
-  .wp-list-table .column-azioni {
-	display: none;
-  }
-  
-  .smp-action {
-	display: block;
-	margin-bottom: 5px !important;
-	margin-right: 0 !important;
+  .spm-stat-number {
+    font-size: 1.875rem;
   }
 }
 
 /* ==========================================================================
-   UTILITIES
+   OVERRIDE WORDPRESS ADMIN
    ========================================================================== */
 
-.spm-loading {
-  opacity: 0.6;
-  pointer-events: none;
+.toplevel_page_pulse-manager .wrap,
+.pulse-manager_page_pulse-sync .wrap,
+.pulse-manager_page_pulse-reports .wrap,
+.pulse-manager_page_pulse-settings .wrap {
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-.spm-hidden {
-  display: none !important;
-}
-
-.spm-text-center {
-  text-align: center;
-}
-
-.spm-text-right {
-  text-align: right;
-}
-
-.spm-mt-10 {
-  margin-top: 10px;
-}
-
-.spm-mb-10 {
-  margin-bottom: 10px;
-}
-
-.spm-p-10 {
-  padding: 10px;
-}
-
-/* Spinner customizzato */
-.spm-spinner {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid #f3f3f3;
-  border-top: 2px solid #0073aa;
-  border-radius: 50%;
-  animation: smp-spin 1s linear infinite;
-  margin-left: 8px;
-}
-
-@keyframes spm-spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+/* Nasconde il titolo H1 di default di WordPress */
+.toplevel_page_pulse-manager .wrap > h1:first-child,
+.pulse-manager_page_pulse-sync .wrap > h1:first-child,
+.pulse-manager_page_pulse-reports .wrap > h1:first-child,
+.pulse-manager_page_pulse-settings .wrap > h1:first-child {
+  display: none;
 }

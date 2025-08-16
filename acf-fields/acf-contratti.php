@@ -57,29 +57,50 @@ if (function_exists('acf_add_local_field_group')) {
 				'label' => 'Prezzo Contratto',
 				'name' => 'prezzo_contratto',
 				'type' => 'number',
-				'instructions' => '',
+				'instructions' => 'Importo singola fattura.',
 				'prepend' => '€',
 				'step' => 0.01,
 				'min' => 0,
-				'wrapper' => ['width' => '33'],
+				'wrapper' => ['width' => '50'],
 			],
+			// Cadenza Fatturazione
+		[
+			'key'           => 'field_spm_contratto_cadenza_fatturazione',
+			'label'         => 'Cadenza fatturazione',
+			'name'          => 'cadenza_fatturazione',
+			'type'          => 'select',
+			'choices'       => [
+				'mensile'         => 'Mensile',
+				'trimestrale'     => 'Trimestrale',
+				'quadrimestrale'  => 'Quadrimestrale',
+				'semestrale'      => 'Semestrale',
+				'annuale'         => 'Annuale',
+			],
+			'default_value' => 'annuale',
+			'required'      => 1,
+			'ui'            => 1,
+			'wrapper'       => ['width' => '50'],
+			'instructions'  => 'Frequenza emissione fattura',
+		],
+
 			
 			// Frequenza rinnovo
 			[
 				'key' => 'field_spm_contratto_frequenza',
-				'label' => 'Frequenza Rinnovo',
+				'label' => 'Durata e Frequenza Rinnovo',
 				'name' => 'frequenza',
 				'type' => 'select',
 				'choices' => [
 					'mensile' => 'Mensile',
 					'trimestrale' => 'Trimestrale',
+					'quadrimestrale' => 'Quadrimestrale',
 					'semestrale' => 'Semestrale',
 					'annuale' => 'Annuale',
 				],
 				'default_value' => 'annuale',
 				'required' => 1,
 				'ui' => 1,
-				'wrapper' => ['width' => '33'],
+				'wrapper' => ['width' => '50'],
 				'instructions' => '',
 			],
 			
@@ -97,7 +118,7 @@ if (function_exists('acf_add_local_field_group')) {
 				],
 				'default_value' => 'attivo',
 				'ui' => 1,
-				'wrapper' => ['width' => '34'],
+				'wrapper' => ['width' => '50'],
 			],
 			
 			// Data attivazione (inizio contratto)
