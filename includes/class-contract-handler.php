@@ -64,9 +64,21 @@ class SPM_Contract_Handler {
 		add_filter('manage_contratti_posts_columns', [__CLASS__, 'add_admin_columns']);
 		add_action('manage_contratti_posts_custom_column', [__CLASS__, 'render_admin_columns'], 10, 2);
 		
+		add_filter('manage_edit-contratti_sortable_columns', [__CLASS__, 'add_sortable_columns']);
+		add_action('pre_get_posts', [__CLASS__, 'handle_sortable_and_filters']);
+		
+		add_action('restrict_manage_posts', [__CLASS__, 'add_admin_filters']); // UI filtri
+		add_filter('parse_query', [__CLASS__, 'apply_admin_filters']);         // Logica filtri
+
 		// Metabox azioni
 		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
 		add_action('add_meta_boxes_contratti', [__CLASS__, 'add_action_metabox']);
+		
+		// Nascondi/lock pulsante Aggiorna (Classic + Gutenberg) quando cessato
+		add_action('admin_head-post.php', [__CLASS__, 'admin_head_hide_update_for_cessati']);
+		
+		// Disattiva autosave/heartbeat (evita salvataggi impliciti) quando cessato
+		add_action('admin_enqueue_scripts', [__CLASS__, 'disable_autosave_for_cessati']);
 		
 		// Script admin
 		add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_admin_scripts']);
@@ -629,8 +641,9 @@ class SPM_Contract_Handler {
 			'cliente' => 'Cliente',
 			'servizio' => 'Servizio',
 			'scadenza' => 'Scadenza',
+			'frequenza'     => 'Frequenza',
 			'stato' => 'Stato',
-			'azioni' => 'Azioni Rapide'
+			// 'azioni' => 'Azioni Rapide'
 		];
 		return $new_columns;
 	}
@@ -664,6 +677,18 @@ class SPM_Contract_Handler {
 					echo '—';
 				}
 				break;
+				
+			case 'frequenza':
+			$freq = get_field('frequenza', $post_id);
+			$map  = [
+				'mensile'     => 'Mensile',
+				'trimestrale' => 'Trimestrale',
+				'semestrale'  => 'Semestrale',
+				'annuale'     => 'Annuale',
+			];
+			$label = $map[$freq] ?? ( $freq ? ucfirst((string)$freq) : '—' );
+			echo esc_html($label);
+			break;
 				
 			case 'stato':
 				$stato = get_field('stato', $post_id);
@@ -702,7 +727,10 @@ class SPM_Contract_Handler {
 			break;
 
 		}
+		
 	}
+	
+
 	
 	/**
 	 * METABOX AZIONI
@@ -865,4 +893,256 @@ class SPM_Contract_Handler {
 			wp_send_json_error($result ?: ['message' => 'Azione non valida']);
 		}
 	}
+	
+	/**
+	 * Helper: è un contratto cessato?
+	 */
+	private static function is_contratto_cessato($post_id) {
+		if (!$post_id || get_post_type($post_id) !== 'contratti') return false;
+		$stato = get_field('stato', $post_id);
+		return ($stato === 'cessato');
+	}
+	
+	/**
+	 * UI editor: nasconde il pulsante "Aggiorna" e blocca il salvataggio (senza toccare le capability).
+	 * Funziona su Classic Editor e Gutenberg. L'utente può entrare e modificare i campi,
+	 * ma non può eseguire il salvataggio.
+	 */
+	public static function admin_head_hide_update_for_cessati() {
+		global $post, $pagenow;
+		if ($pagenow !== 'post.php' || !$post || $post->post_type !== 'contratti') return;
+		if (!self::is_contratto_cessato($post->ID)) return;
+	
+		// Classic editor: nascondi il pulsante "Aggiorna"
+		echo '<style>
+			/* bottone "Aggiorna" nel submit box */
+			#publishing-action .button.button-primary.button-large { display:none !important; }
+			/* sistema layout del box azioni */
+			#submitpost #major-publishing-actions { display:flex; justify-content:space-between; align-items:center; }
+		</style>';
+	
+		// Gutenberg: blocca il salvataggio + nascondi il primario in header
+		?>
+		<script>
+		(function(){
+			function lockSaving(){
+				if (window.wp && wp.data && wp.data.dispatch) {
+					try { wp.data.dispatch('core/editor').lockPostSaving('spm-contract-locked'); } catch(e){}
+				}
+			}
+			function hidePrimaryButton(){
+				var btn = document.querySelector('.edit-post-header__settings .components-button.is-primary');
+				if (btn) btn.style.display = 'none';
+			}
+			// ripeti per gestire mount asincrono dell'editor
+			var i = setInterval(function(){ lockSaving(); hidePrimaryButton(); }, 300);
+			setTimeout(function(){ clearInterval(i); }, 3000);
+			if (window.wp && wp.domReady) wp.domReady(function(){ lockSaving(); hidePrimaryButton(); });
+		})();
+		</script>
+		<?php
+	}
+	
+	/**
+	 * Evita salvataggi impliciti (autosave, heartbeat) quando cessato.
+	 * Non tocca le capability: l'utente entra e vede tutto, ma non partono update in background.
+	 */
+	public static function disable_autosave_for_cessati($hook) {
+		global $post;
+		if ($hook !== 'post.php' || !$post || $post->post_type !== 'contratti') return;
+		if (!self::is_contratto_cessato($post->ID)) return;
+	
+		// Disattiva autosave e heartbeat (sia Classic che Gutenberg si appoggiano a questi)
+		wp_deregister_script('autosave');
+		wp_dequeue_script('autosave');
+		wp_dequeue_script('heartbeat');
+	}
+	
+	/**
+	 * Rende ordinabili alcune colonne della lista contratti.
+	 */
+	public static function add_sortable_columns($columns) {
+		$columns['servizio']  = 'servizio';
+		$columns['scadenza']  = 'data_prossima_scadenza';
+		$columns['frequenza'] = 'frequenza';
+		$columns['stato']     = 'stato';
+		return $columns;
+	}
+	
+	/**
+	 * Gestisce l'ordinamento quando si cliccano le intestazioni.
+	 */
+	public static function handle_sortable_and_filters($query) {
+		if (!is_admin() || !$query->is_main_query()) return;
+		if ($query->get('post_type') !== 'contratti') return;
+	
+		$orderby = $query->get('orderby');
+	
+		// SCADENZA (campo meta YYYY-MM-DD)
+		if ($orderby === 'data_prossima_scadenza' || $orderby === 'scadenza') {
+			$query->set('meta_key', 'data_prossima_scadenza');
+			$query->set('orderby', 'meta_value'); // Y-m-d ordina correttamente come stringa
+		}
+	
+		// FREQUENZA (meta testuale)
+		if ($orderby === 'frequenza') {
+			$query->set('meta_key', 'frequenza');
+			$query->set('orderby', 'meta_value');
+		}
+	
+		// STATO (meta testuale)
+		if ($orderby === 'stato') {
+			$query->set('meta_key', 'stato');
+			$query->set('orderby', 'meta_value');
+		}
+	
+		// SERVIZIO (ACF post object: salviamo l'ID nel meta 'servizio')
+		if ($orderby === 'servizio') {
+			$query->set('meta_key', 'servizio');
+			$query->set('orderby', 'meta_value_num');
+		}
+	}
+/**
+	 * Aggiunge i filtri sopra la tabella della lista contratti.
+	 */
+	public static function add_admin_filters($post_type) {
+		if ($post_type !== 'contratti') return;
+	
+		// ——— Servizio (dropdown dai post "servizi") ———
+		// Adatta $servizio_post_type se diverso (es: 'servizi')
+		$servizio_post_type = 'servizi';
+		$sel_servizio = isset($_GET['filter_servizio']) ? intval($_GET['filter_servizio']) : 0;
+	
+		wp_dropdown_pages([
+			'post_type'        => $servizio_post_type,
+			'name'             => 'filter_servizio',
+			'show_option_all'  => 'Tutti i servizi',
+			'option_none_value'=> '',
+			'selected'         => $sel_servizio,
+			// usa posts_per_page -1 per elencare tutto (valuta performance)
+			'number'           => 0,
+		]);
+	
+		// ——— Scadenza (intervallo) ———
+		$scad_from = isset($_GET['filter_scadenza_from']) ? esc_attr($_GET['filter_scadenza_from']) : '';
+		$scad_to   = isset($_GET['filter_scadenza_to'])   ? esc_attr($_GET['filter_scadenza_to'])   : '';
+		echo '<input type="date" name="filter_scadenza_from" value="' . $scad_from . '" placeholder="Scadenza da" style="margin-left:8px" />';
+		echo '<input type="date" name="filter_scadenza_to"   value="' . $scad_to   . '" placeholder="Scadenza a"  style="margin-left:4px" />';
+	
+		// ——— Frequenza ———
+		$freq_options = [
+			''             => 'Tutte le frequenze',
+			'mensile'      => 'Mensile',
+			'trimestrale'  => 'Trimestrale',
+			'semestrale'   => 'Semestrale',
+			'annuale'      => 'Annuale',
+		];
+		$sel_freq = isset($_GET['filter_frequenza']) ? sanitize_text_field($_GET['filter_frequenza']) : '';
+		echo '<select name="filter_frequenza" style="margin-left:8px">';
+		foreach ($freq_options as $val => $label) {
+			printf('<option value="%s"%s>%s</option>',
+				esc_attr($val),
+				selected($sel_freq, $val, false),
+				esc_html($label)
+			);
+		}
+		echo '</select>';
+	
+		// ——— Stato ———
+		$stato_options = [
+			''         => 'Tutti gli stati',
+			'attivo'   => 'Attivo',
+			'sospeso'  => 'Sospeso',
+			'scaduto'  => 'Scaduto',
+			'cessato'  => 'Cessato',
+		];
+		$sel_stato = isset($_GET['filter_stato']) ? sanitize_text_field($_GET['filter_stato']) : '';
+		echo '<select name="filter_stato" style="margin-left:8px">';
+		foreach ($stato_options as $val => $label) {
+			printf('<option value="%s"%s>%s</option>',
+				esc_attr($val),
+				selected($sel_stato, $val, false),
+				esc_html($label)
+			);
+		}
+		echo '</select>';
+	}
+	
+	/**
+	 * Applica i filtri alla query principale della lista contratti.
+	 */
+	public static function apply_admin_filters($query) {
+		if (!is_admin() || !$query->is_main_query()) return;
+		if ($query->get('post_type') !== 'contratti') return;
+	
+		$meta_query = [];
+		$meta_query['relation'] = 'AND';
+	
+		// ——— Servizio (ACF post object: meta 'servizio' = ID) ———
+		if (!empty($_GET['filter_servizio'])) {
+			$servizio_id = intval($_GET['filter_servizio']);
+			if ($servizio_id > 0) {
+				$meta_query[] = [
+					'key'     => 'servizio',
+					'value'   => $servizio_id,
+					'compare' => '=',
+				];
+			}
+		}
+	
+		// ——— Frequenza (meta testuale) ———
+		if (!empty($_GET['filter_frequenza'])) {
+			$freq = sanitize_text_field($_GET['filter_frequenza']);
+			$meta_query[] = [
+				'key'     => 'frequenza',
+				'value'   => $freq,
+				'compare' => '=',
+			];
+		}
+	
+		// ——— Stato (meta testuale) ———
+		if (!empty($_GET['filter_stato'])) {
+			$stato = sanitize_text_field($_GET['filter_stato']);
+			$meta_query[] = [
+				'key'     => 'stato',
+				'value'   => $stato,
+				'compare' => '=',
+			];
+		}
+	
+		// ——— Scadenza (intervallo date YYYY-MM-DD) ———
+		$from = !empty($_GET['filter_scadenza_from']) ? sanitize_text_field($_GET['filter_scadenza_from']) : '';
+		$to   = !empty($_GET['filter_scadenza_to'])   ? sanitize_text_field($_GET['filter_scadenza_to'])   : '';
+	
+		if ($from && $to) {
+			$meta_query[] = [
+				'key'     => 'data_prossima_scadenza',
+				'value'   => [$from, $to],
+				'compare' => 'BETWEEN',
+				'type'    => 'CHAR', // 'Y-m-d' confrontabile come stringa
+			];
+		} elseif ($from) {
+			$meta_query[] = [
+				'key'     => 'data_prossima_scadenza',
+				'value'   => $from,
+				'compare' => '>=',
+				'type'    => 'CHAR',
+			];
+		} elseif ($to) {
+			$meta_query[] = [
+				'key'     => 'data_prossima_scadenza',
+				'value'   => $to,
+				'compare' => '<=',
+				'type'    => 'CHAR',
+			];
+		}
+	
+		// Applica meta_query se abbiamo almeno un filtro reale
+		if (count($meta_query) > 1) {
+			$query->set('meta_query', $meta_query);
+		}
+	}
+
+
 }
+

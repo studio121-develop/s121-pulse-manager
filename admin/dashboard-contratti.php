@@ -123,13 +123,13 @@ function spm_render_dashboard() {
 				</p>
 				
 				<p>
-					<a href="<?php echo admin_url('edit.php?post_type=contratti&stato=scaduto'); ?>" class="button" style="width: 100%;">
+					<a href="<?php echo admin_url('edit.php?post_type=contratti&filter_stato=scaduto'); ?>" class="button" style="width: 100%;">
 						🔴 Vedi Scaduti (<?php echo $stats['scaduti']; ?>)
 					</a>
 				</p>
 				
 				<p>
-					<a href="<?php echo admin_url('edit.php?post_type=contratti&stato=attivo'); ?>" class="button" style="width: 100%;">
+					<a href="<?php echo admin_url('edit.php?post_type=contratti&filter_stato=attivo'); ?>" class="button" style="width: 100%;">
 						🟢 Vedi Attivi (<?php echo $stats['attivi']; ?>)
 					</a>
 				</p>
