@@ -112,7 +112,7 @@
 		.done(function(res){
 		  console.log('[SPM] rinnova SUCCESS', res);
 		  alert(res.data && res.data.message ? res.data.message : 'Rinnovo completato');
-		  window.location.reload();
+		  clearUnsavedGuardThenReload(); // <-- al posto di window.location.reload()
 		})
 		.fail(function(err){
 		  console.error('[SPM] rinnova ERROR', err);
@@ -122,3 +122,40 @@
   });
 
 })(jQuery);
+
+function clearUnsavedGuardThenReload() {
+  try {
+	// Gutenberg: se l’editor pensa che ci siano modifiche non salvate, salva in modo programmatico
+	if (window.wp && wp.data && wp.data.select && wp.data.dispatch) {
+	  var sel = wp.data.select('core/editor');
+	  var disp = wp.data.dispatch('core/editor');
+
+	  if (sel && disp && typeof sel.isEditedPostDirty === 'function') {
+		if (sel.isEditedPostDirty()) {
+		  // salva e poi ricarica quando finisce
+		  disp.savePost();
+		  var unsubscribe = wp.data.subscribe(function(){
+			var isSaving = sel.isSavingPost();
+			var isAutosaving = sel.isAutosavingPost && sel.isAutosavingPost();
+			if (!isSaving && !isAutosaving) {
+			  unsubscribe && unsubscribe();
+			  // piccolo timeout per sicurezza
+			  setTimeout(function(){ window.location.reload(); }, 50);
+			}
+		  });
+		  return; // usciamo: il reload lo facciamo dal subscribe
+		}
+	  }
+	}
+
+	// Classic editor (o fallback): rimuovi i beforeunload e ricarica
+	window.onbeforeunload = null;
+	if (window.jQuery) {
+	  try { jQuery(window).off('beforeunload'); } catch(e){}
+	}
+  } catch(e) {
+	// non bloccare il reload in caso di errori
+	console.warn('[SPM] clearUnsavedGuardThenReload fallback', e);
+  }
+  window.location.reload();
+}
