@@ -100,8 +100,18 @@ if (function_exists('acf_add_local_field_group')) {
 				'default_value' => 'annuale',
 				'required' => 1,
 				'ui' => 1,
-				'wrapper' => ['width' => '50'],
+				'wrapper' => ['width' => '33'],
 				'instructions' => '',
+			],
+			[
+				'key' => 'field_spm_contratto_rinnovo_auto',
+				'label' => 'Rinnovo Automatico',
+				'name' => 'rinnovo_automatico',
+				'type' => 'true_false',
+				'instructions' => '',
+				'ui' => 1,
+				'default_value' => 0,
+				'wrapper' => ['width' => '33'],
 			],
 			
 			// Stato contratto
@@ -118,7 +128,7 @@ if (function_exists('acf_add_local_field_group')) {
 				],
 				'default_value' => 'attivo',
 				'ui' => 1,
-				'wrapper' => ['width' => '50'],
+				'wrapper' => ['width' => '34'],
 			],
 			
 			// Data attivazione (inizio contratto)
@@ -160,16 +170,6 @@ if (function_exists('acf_add_local_field_group')) {
 			],
 			
 			// Rinnovo automatico
-			[
-				'key' => 'field_spm_contratto_rinnovo_auto',
-				'label' => 'Rinnovo Automatico',
-				'name' => 'rinnovo_automatico',
-				'type' => 'true_false',
-				'instructions' => '',
-				'ui' => 1,
-				'default_value' => 0,
-				'wrapper' => ['width' => '50'],
-			],
 			
 			// Giorni preavviso
 			[

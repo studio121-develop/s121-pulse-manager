@@ -159,3 +159,53 @@ function clearUnsavedGuardThenReload() {
   }
   window.location.reload();
 }
+
+(function () {
+  const AVVISO_SALVATAGGIO = [
+	"⚠️ Attenzione:",
+	"Questo salvataggio aggiorna solo i dettagli del contratto.",
+	"",
+	"Per modificare la scadenza, usa il pulsante “🔄 Rinnova Contratto”.",
+  ].join("\n");
+
+  const originalClick = window.spmNativePrimaryClick;
+
+  function isInitializedContract() {
+	// 1) Editor a blocchi: stato preciso
+	try {
+	  if (window.wp && wp.data && wp.data.select) {
+		const status = wp.data.select("core/editor").getEditedPostAttribute("status");
+		if (status) return status !== "auto-draft" && status !== "draft";
+	  }
+	} catch (e) {}
+
+	// 2) Classic editor: hidden input con stato originale
+	const stEl = document.querySelector("#original_post_status");
+	if (stEl && stEl.value) {
+	  const st = stEl.value;
+	  return st !== "auto-draft" && st !== "draft";
+	}
+
+	// 3) Fallback: se non c'è ID, consideralo "non creato"
+	if (window.SPM_VARS && Number(SPM_VARS.postId) > 0) return true;
+
+	return false;
+  }
+
+  window.spmNativePrimaryClick = function () {
+	// Solo contratti già creati → mostra conferma
+	if (isInitializedContract()) {
+	  const ok = window.confirm(AVVISO_SALVATAGGIO);
+	  if (!ok) return; // stop: non salvare
+	}
+
+	// Prosegui col comportamento originale
+	if (typeof originalClick === "function") {
+	  return originalClick.apply(this, arguments);
+	}
+
+	// Fallback estremo
+	const form = document.querySelector("form#post");
+	if (form) form.submit();
+  };
+})();

@@ -722,6 +722,8 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 	 * Invia reminder scadenze
 	 */
 	private static function invia_reminder() {
+		
+		return; // disabilitiamo temporaneamente invio reminder
 		$args = [
 			'post_type' => 'contratti',
 			'posts_per_page' => -1,
