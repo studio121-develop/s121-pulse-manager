@@ -5,20 +5,6 @@
 
 defined('ABSPATH') || exit;
 
-// Aggiungi voce menu
-add_action('admin_menu', 'spm_add_dashboard_menu');
-
-function spm_add_dashboard_menu() {
-	add_submenu_page(
-		'edit.php?post_type=contratti',
-		'Dashboard Contratti',
-		'📊 Dashboard',
-		'manage_options',
-		'contratti-dashboard',
-		'spm_render_dashboard'
-	);
-}
-
 /**
  * Render Dashboard
  */

@@ -16,11 +16,25 @@ class SPM_Contract_Handler {
 	private static $is_saving = false; // Previeni loop infiniti
 	private static $pending_diffs = []; 
 
-	// --- POLICY CONTRATTI ---
-	// entro questa soglia è "scaduto poco" -> rinnovo consentito con allineamento
-	private const TOLLERANZA_SCADUTO_GIORNI = 60;
-	// oltre questa soglia è "scaduto troppo" -> considerato cessato
-	private const AUTO_CESSAZIONE_GIORNI    = 90;
+	// // --- POLICY CONTRATTI ---
+	// // entro questa soglia è "scaduto poco" -> rinnovo consentito con allineamento
+	// private const TOLLERANZA_SCADUTO_GIORNI = 60;
+	// // oltre questa soglia è "scaduto troppo" -> considerato cessato
+	// private const AUTO_CESSAZIONE_GIORNI    = 90;
+	
+	// // --- POLICY CONTRATTI ---
+	private static function get_tolleranza_scaduto_giorni() {
+		if (class_exists('SPM_Settings_Page')) {
+			return (int) SPM_Settings_Page::get('tolleranza_scaduto_giorni');
+		}
+		return 60; // fallback
+	}
+	private static function get_auto_cessazione_giorni() {
+		if (class_exists('SPM_Settings_Page')) {
+			return (int) SPM_Settings_Page::get('auto_cessazione_giorni');
+		}
+		return 90; // fallback
+	}
 
 
 	/**
@@ -326,7 +340,7 @@ class SPM_Contract_Handler {
 
 			// 1) Se troppo arretrato -> auto-cessato e stop
 			// Auto-cessazione
-			if ($is_expired && $days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
+			if ($is_expired && $days_since !== null && $days_since > self::get_auto_cessazione_giorni()) {
 				update_field('stato', 'cessato', $post_id);
 				self::log_operazione($post_id, 'cessazione', 0, '', ['days_since' => $days_since]);
 				return;
@@ -482,9 +496,9 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		$days_since = SPM_Date_Helper::days_since_due($scadenza_attuale);
 
 		// CASO 3: SCADUTO TROPPO -> consideralo cessato e blocca
-		if ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
+		if ($days_since !== null && $days_since > self::get_auto_cessazione_giorni()) {
 			update_field('stato', 'cessato', $post_id);
-			self::log_operazione($post_id, 'cessazione', 0, "Blocco rinnovo: scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ").");
+			self::log_operazione($post_id, 'cessazione', 0, "Blocco rinnovo: scaduto da {$days_since} giorni (soglia " . self::get_auto_cessazione_giorni() . ").");
 			self::touch_servizio_stats($post_id);
 			return ['success' => false, 'message' => 'Contratto scaduto da troppo tempo: considerato cessato. Non rinnovabile.'];
 		}
@@ -520,7 +534,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 
 		// CASO 2: SCADUTO POCO (entro tolleranza) -> allinea oltre oggi (catch-up)
 		// Catch-up entro tolleranza
-		if ($days_since !== null && $days_since > 0 && $days_since <= self::TOLLERANZA_SCADUTO_GIORNI) {
+		if ($days_since !== null && $days_since > 0 && $days_since <= self::get_tolleranza_scaduto_giorni()) {
 			[$nuova_scadenza, $steps] = self::roll_forward_due_date($scadenza_attuale, $frequenza);
 		
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
@@ -680,7 +694,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			
 				// 1) BLOCCO OLTRE SOGLIA: auto-cessa invece di rinnovare
 				$days_since = SPM_Date_Helper::days_since_due($scadenza_attuale);
-				if ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
+				if ($days_since !== null && $days_since > self::get_auto_cessazione_giorni()) {
 					update_field('stato', 'cessato', $post->ID);
 					self::log_operazione($post->ID, 'cessazione', 0, '', ['days_since' => $days_since]);
 					self::touch_servizio_stats($post->ID);
@@ -931,7 +945,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		$scadenza  = get_field('data_prossima_scadenza', $post->ID);
 		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : null;
 		$days_since   = $scadenza ? SPM_Date_Helper::days_since_due($scadenza) : null;
-		$oltre_soglia = ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI);
+		$oltre_soglia = ($days_since !== null && $days_since > self::get_auto_cessazione_giorni());
 		?>
 		<div id="spm-actions-box">
 

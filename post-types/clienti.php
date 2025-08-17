@@ -16,9 +16,10 @@ function spm_register_cpt_clienti() {
 		],
 		'public' => false,
 		'show_ui' => true,
-		'show_in_menu' => true,
-		'menu_position' => 20,
-		'menu_icon' => 'dashicons-businessperson',
+		'show_in_menu'      => 's121-pulse-manager', // <- aggancia al menu del plugin
+		'show_in_admin_bar' => false,                 // niente duplicati nella admin bar
+		'menu_position'     => null,                  // gestito dal menu principale
+		'menu_icon'         => null,                  // l’icona è del top-level
 		'supports' => ['title'],
 		'capability_type' => 'post',
 		'has_archive' => false,

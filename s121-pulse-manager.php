@@ -8,6 +8,12 @@
 
 defined('ABSPATH') || exit;
 
+// Puntatore al file principale del plugin (usato per link rapidi, ecc.)
+if (!defined('SPM_PLUGIN_FILE')) {
+    define('SPM_PLUGIN_FILE', __FILE__);
+}
+
+// Carica stile admin quando si editano i post del plugin
 add_action('admin_enqueue_scripts', function($hook) {
     if ($hook === 'post.php' || $hook === 'post-new.php') {
         wp_enqueue_style('spm-admin', plugin_dir_url(__FILE__) . 'assets/css/admin.css');
@@ -46,6 +52,18 @@ require_once plugin_dir_path(__FILE__) . 'includes/oauth-utils.php';
 require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php';
 
 // ==========================================================
+// BACKEND MENU & SETTINGS
+// ==========================================================
+// Menu amministrazione centralizzato (raggruppa dashboard + CPT sotto "Pulse Manager")
+require_once plugin_dir_path(__FILE__) . 'includes/class-admin-menu.php';
+SPM_Admin_Menu::init();
+
+// Pagina Impostazioni plugin (Policy contratti, ecc.)
+require_once plugin_dir_path(__FILE__) . 'includes/class-settings-page.php';
+SPM_Settings_Page::init();
+
+
+// ==========================================================
 // INIT
 // ==========================================================
 
@@ -64,12 +82,13 @@ register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('spm_daily_check');
 });
 
+// Esecuzione job di sync con Fatture in Cloud
 add_action('spm_sync_clienti_cron', function () {
     require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php';
     sync_clienti_da_fic(false);
 });
 
-// Debug sync manuale
+// Debug sync manuale (solo admin, via querystring)
 add_action('admin_init', function () {
     if (isset($_GET['spm_test_sync']) && current_user_can('manage_options')) {
         sync_clienti_da_fic(true);
@@ -78,20 +97,10 @@ add_action('admin_init', function () {
 });
 
 
-
-// Menu principale plugin
-add_action('admin_menu', function() {
-    add_menu_page(
-        'S121 Pulse Manager',
-        'Pulse Manager',
-        'manage_options',
-        's121-pulse-manager',
-        'spm_render_main_dashboard',
-        'dashicons-chart-pie',
-        3
-    );
-});
-
+// ==========================================================
+// DASHBOARD REDIRECT
+// ==========================================================
+// Callback usata per aprire la dashboard dei contratti dal menu plugin
 function spm_render_main_dashboard() {
     // Redirect alla dashboard contratti
     wp_redirect(admin_url('edit.php?post_type=contratti&page=contratti-dashboard'));
