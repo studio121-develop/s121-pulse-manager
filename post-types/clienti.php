@@ -335,3 +335,18 @@ add_action('admin_notices', function(){
 		echo '<div class="notice notice-success is-dismissible"><p>Backfill clienti completato: ' . esc_html($done) . ' record aggiornati.</p></div>';
 	}
 });
+
+/**
+ * Ordinamento di default lista Clienti (contratti attivi DESC).
+ */
+add_action('pre_get_posts', function($q){
+	if (!is_admin() || !$q->is_main_query()) return;
+	if ($q->get('post_type') !== 'clienti') return;
+
+	// Se non è già impostato un ordinamento dall’utente, forza default
+	if (!$q->get('orderby')) {
+		$q->set('meta_key', 'has_contratti_attivi');
+		$q->set('orderby', 'meta_value_num');
+		$q->set('order', 'DESC'); // prima i clienti con contratti attivi
+	}
+});
