@@ -14,6 +14,7 @@ defined('ABSPATH') || exit;
 class SPM_Contract_Handler {
 	
 	private static $is_saving = false; // Previeni loop infiniti
+	private static $pending_diffs = []; 
 
 	// --- POLICY CONTRATTI ---
 	// entro questa soglia è "scaduto poco" -> rinnovo consentito con allineamento
@@ -48,6 +49,9 @@ class SPM_Contract_Handler {
 	 * Inizializza la classe
 	 */
 	public static function init() {
+	
+		add_action('acf/save_post', [__CLASS__, 'pre_acf_capture_diffs'], 1);
+
 		// Hook salvataggio contratto
 		add_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
 		
@@ -214,7 +218,11 @@ class SPM_Contract_Handler {
 	
 		// 3) Se è il primo salvataggio, logga subito "creazione"
 		if ($is_first_log) {
-			self::log_operazione($post_id, 'creazione', null, 'Contratto creato');
+			$ctx = [
+				'data_inizio'       => get_field('data_attivazione', $post_id),
+				'scadenza_iniziale' => get_field('data_prossima_scadenza', $post_id),
+			];
+			self::log_operazione($post_id, 'creazione', null, '', $ctx);
 		}
 	
 		// 4) Aggiorna stato basato su scadenza (potrebbe loggare "scadenza" o "cessazione auto")
@@ -225,7 +233,13 @@ class SPM_Contract_Handler {
 	
 		// 6) Se NON era il primo salvataggio, logga "modifica"
 		if (!$is_first_log) {
-			self::log_operazione($post_id, 'modifica', null, 'Contratto modificato');
+			$diff = self::$pending_diffs[$post_id]['changes'] ?? null;
+			if ($diff) {
+				self::log_operazione($post_id, 'modifica', null, '', ['changes' => $diff]);
+				unset(self::$pending_diffs[$post_id]);
+			} else {
+				self::log_operazione($post_id, 'modifica', null, 'Contratto modificato');
+			}
 		}
 		self::touch_servizio_stats($post_id);
 		self::$is_saving = false;
@@ -288,23 +302,25 @@ class SPM_Contract_Handler {
 			$days_since = SPM_Date_Helper::days_since_due($scadenza);
 
 			// 1) Se troppo arretrato -> auto-cessato e stop
+			// Auto-cessazione
 			if ($is_expired && $days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
 				update_field('stato', 'cessato', $post_id);
-				self::log_operazione($post_id, 'cessazione', 0, "Auto-cessazione: scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ").");
+				self::log_operazione($post_id, 'cessazione', 0, '', ['days_since' => $days_since]);
 				return;
 			}
 
 			// 2) Altrimenti, stato coerente con la data
+			// Passa a scaduto
 			if ($is_expired) {
 				if ($stato !== 'scaduto' && $stato !== 'sospeso') {
 					update_field('stato', 'scaduto', $post_id);
-					self::log_operazione($post_id, 'scadenza', null, 'Contratto scaduto automaticamente');
+					self::log_operazione($post_id, 'scadenza', null, '', ['trigger' => 'auto']);
 				}
 			} else {
-				// Se era scaduto ma ora non più -> torna attivo (non forzo se sospeso)
+				// Da scaduto a attivo
 				if ($stato === 'scaduto') {
 					update_field('stato', 'attivo', $post_id);
-					self::log_operazione($post_id, 'riattivazione', null, 'Contratto riattivato automaticamente');
+					self::log_operazione($post_id, 'riattivazione', null, '', ['nuovo_stato' => 'attivo']);
 				}
 			}
 		}
@@ -335,47 +351,93 @@ class SPM_Contract_Handler {
 		}
 	}
 	
-	/**
-	 * LOG OPERAZIONE - Nuovo sistema di storico completo
-	 */
-	private static function log_operazione($post_id, $tipo_operazione, $importo = null, $note = '') {
+private static function log_operazione($post_id, $tipo_operazione, $importo = null, $note = '', $context = []) {
 		$storico = get_field('storico_contratto', $post_id) ?: [];
-		
-		// Se importo non specificato, calcolalo SEMPRE dal contratto/servizio
+	
+		// Importo robusto
 		if ($importo === null) {
-			// attenzione: "0" (string) o 0 (int) sono valori validi, quindi uso controlli stretti
 			$val = get_field('prezzo_contratto', $post_id);
 			if ($val !== '' && $val !== null) {
 				$importo = $val;
 			} else {
 				$servizio_id = get_field('servizio', $post_id);
 				$val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
-				$importo = ($val !== '' && $val !== null) ? $val : 0; // fallback finale
+				$importo = ($val !== '' && $val !== null) ? $val : 0;
 			}
 		}
-		
-		// Ottieni utente corrente
+	
+		// Autogenera nota se non fornita
+		if ($note === '' && !empty($context)) {
+			$note = self::build_note_from_context($tipo_operazione, $context, $post_id);
+		}
+	
 		$current_user = wp_get_current_user();
 		$utente = $current_user->display_name ?: 'Sistema';
-		
-		// Aggiungi nuova voce al log
-		$nuova_voce = [
+	
+		$storico_entry = [
 			'data_operazione' => date('Y-m-d'),
-			'ora_operazione' => date('H:i'),
+			'ora_operazione'  => date('H:i'),
 			'tipo_operazione' => $tipo_operazione,
-			'importo' => $importo,
-			'utente' => $utente,
-			'note' => $note
+			'importo'         => $importo,
+			'utente'          => $utente,
+			'note'            => $note
 		];
-		
-		array_unshift($storico, $nuova_voce); // Aggiungi in cima (più recenti prima)
-		
-		// Mantieni solo ultimi 50 record per performance
+	
+		array_unshift($storico, $storico_entry);
 		$storico = array_slice($storico, 0, 50);
-		
+	
 		update_field('storico_contratto', $storico, $post_id);
 	}
 	
+	private static function build_note_from_context($tipo, array $ctx, $post_id) {
+		$fmt = function($ymd) { return $ymd ? SPM_Date_Helper::to_display_format($ymd) : '—'; };
+	
+		switch ($tipo) {
+			case 'creazione': {
+				$inizio = $fmt($ctx['data_inizio']        ?? get_field('data_attivazione', $post_id));
+				$scad   = $fmt($ctx['scadenza_iniziale']   ?? get_field('data_prossima_scadenza', $post_id));
+				return "Creato. Inizio: {$inizio}. Prima scadenza: {$scad}.";
+			}
+			case 'rinnovo_automatico':
+			case 'rinnovo_manuale': {
+				$old   = $fmt($ctx['scadenza_precedente'] ?? null);
+				$new   = $fmt($ctx['scadenza_nuova']      ?? null);
+				$steps = isset($ctx['steps']) ? (int)$ctx['steps'] : 1;
+				$stepTxt = $steps > 1 ? " (+{$steps} periodi)" : "";
+				return "Rinnovo{$stepTxt}. Da {$old} a {$new}.";
+			}
+			case 'cessazione': {
+				if (isset($ctx['days_since'])) return "Cessato. Scaduto da {$ctx['days_since']} giorni.";
+				return "Cessato.";
+			}
+			case 'riattivazione': {
+				if (isset($ctx['nuovo_stato'])) return "Riattivato (stato: {$ctx['nuovo_stato']}).";
+				return "Riattivato.";
+			}
+			case 'scadenza': {
+				if (!empty($ctx['trigger'])) return "Scadenza rilevata ({$ctx['trigger']}).";
+				return "Scadenza rilevata.";
+			}
+			case 'modifica': {
+				$labels = [
+					'prezzo_contratto'     => 'Importo',
+					'frequenza'            => 'Frequenza',
+					'cadenza_fatturazione' => 'Cadenza fatturazione',
+				];
+				$parts = [];
+				foreach (($ctx['changes'] ?? []) as $k => $delta) {
+					$from = is_scalar($delta['from']) ? (string)$delta['from'] : json_encode($delta['from']);
+					$to   = is_scalar($delta['to'])   ? (string)$delta['to']   : json_encode($delta['to']);
+					if ($k === 'prezzo_contratto') { $from = ($from !== '' ? "€ {$from}" : '—'); $to = ($to !== '' ? "€ {$to}" : '—'); }
+					if ($from === '') $from = '—';
+					if ($to   === '') $to   = '—';
+					$parts[] = ($labels[$k] ?? ucfirst($k)) . ": {$from} → {$to}";
+				}
+				return $parts ? ('Modifiche: ' . implode('; ', $parts)) : 'Modifica effettuata.';
+			}
+			default: return '';
+		}
+	}
 	/**
 	 * RINNOVA CONTRATTO - Policy: attivo = +1; scaduto poco = allinea; scaduto troppo = cessato, no rinnovo
 	 */
@@ -412,46 +474,45 @@ class SPM_Contract_Handler {
 			$importo = ($val !== '' && $val !== null) ? $val : 0;
 		}
 		
+		$old_scad = $scadenza_attuale;
+		
 		// CASO 1: ATTIVO (scadenza oggi o futuro) -> +1 periodo
+		// Caso attivo: +1
 		if ($days_since !== null && $days_since <= 0) {
 			$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 			update_field('stato', 'attivo', $post_id);
-			
+		
 			self::log_operazione(
 				$post_id,
 				'rinnovo_manuale',
 				$importo,
-				'Rinnovo di 1 periodo. Nuova scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+				'',
+				['scadenza_precedente' => $old_scad, 'scadenza_nuova' => $nuova_scadenza, 'steps' => 1]
 			);
-			
 			self::touch_servizio_stats($post_id);
-			
-			return [
-				'success' => true, 
-				'message' => 'Contratto rinnovato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
-			];
+		
+			return ['success' => true, 'message' => 'Contratto rinnovato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)];
 		}
 
 		// CASO 2: SCADUTO POCO (entro tolleranza) -> allinea oltre oggi (catch-up)
+		// Catch-up entro tolleranza
 		if ($days_since !== null && $days_since > 0 && $days_since <= self::TOLLERANZA_SCADUTO_GIORNI) {
 			[$nuova_scadenza, $steps] = self::roll_forward_due_date($scadenza_attuale, $frequenza);
-			
+		
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 			update_field('stato', 'attivo', $post_id);
-			
+		
 			self::log_operazione(
 				$post_id,
 				'rinnovo_manuale',
 				$importo,
-				sprintf('Allineamento in ritardo: +%d periodi. Nuova scadenza: %s', max(1, (int)$steps), SPM_Date_Helper::to_display_format($nuova_scadenza))
+				'',
+				['scadenza_precedente' => $old_scad, 'scadenza_nuova' => $nuova_scadenza, 'steps' => (int)max(1,$steps)]
 			);
 			self::touch_servizio_stats($post_id);
-
-			return [
-				'success' => true, 
-				'message' => 'Contratto allineato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
-			];
+		
+			return ['success' => true, 'message' => 'Contratto allineato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)];
 		}
 		
 		// Fallback teorico
@@ -591,19 +652,16 @@ class SPM_Contract_Handler {
 				if (!$scadenza_attuale || !$frequenza) {
 					continue;
 				}
+				
+				$old_scad = $scadenza_attuale;
 			
 				// 1) BLOCCO OLTRE SOGLIA: auto-cessa invece di rinnovare
 				$days_since = SPM_Date_Helper::days_since_due($scadenza_attuale);
 				if ($days_since !== null && $days_since > self::AUTO_CESSAZIONE_GIORNI) {
 					update_field('stato', 'cessato', $post->ID);
-					self::log_operazione(
-						$post->ID,
-						'cessazione',
-						0,
-						"Auto-cessazione (cron): scaduto da {$days_since} giorni (soglia " . self::AUTO_CESSAZIONE_GIORNI . ")."
-					);
+					self::log_operazione($post->ID, 'cessazione', 0, '', ['days_since' => $days_since]);
 					self::touch_servizio_stats($post->ID);
-					continue; // passa al prossimo contratto
+					continue;
 				}
 			
 				// 2) RINNOVO AUTOMATICO (policy semplice: +1 periodo)
@@ -621,11 +679,13 @@ class SPM_Contract_Handler {
 					$importo = ($val !== '' && $val !== null) ? $val : 0;
 				}
 			
+				// importo robusto già calcolato in seguito nel tuo codice, riusa la variabile $importo
 				self::log_operazione(
 					$post->ID,
 					'rinnovo_automatico',
 					$importo,
-					'Rinnovo automatico eseguito fino al ' . SPM_Date_Helper::to_display_format($nuova_scadenza)
+					'',
+					['scadenza_precedente' => $old_scad, 'scadenza_nuova' => $nuova_scadenza, 'steps' => 1]
 				);
 			
 				// log di sistema
@@ -1352,6 +1412,46 @@ class SPM_Contract_Handler {
 		self::touch_servizio_stats($post_id);
 	}
 	
+	
+	/**
+	 * PRE: intercetta i valori ACF in arrivo e confronta con quelli in DB.
+	 * Va eseguito PRIMA che ACF scriva i meta (priority 1).
+	 */
+	public static function pre_acf_capture_diffs($post_id) {
+		if (get_post_type($post_id) !== 'contratti') return;
+	
+		$acf = $_POST['acf'] ?? null;
+		if (!$acf || !is_array($acf)) return;
+	
+		// Mappa ACF field_key => meta_key
+		$map = [
+			'field_spm_contratto_prezzo'              => 'prezzo_contratto',
+			'field_spm_contratto_frequenza'           => 'frequenza',
+			'field_spm_contratto_cadenza_fatturazione'=> 'cadenza_fatturazione',
+		];
+	
+		$changes = [];
+	
+		foreach ($map as $acf_key => $meta_key) {
+			if (!array_key_exists($acf_key, $acf)) continue;
+	
+			$new = $acf[$acf_key];
+			$old = get_field($meta_key, $post_id);
+	
+			// Normalizzazioni minime
+			if (is_string($old)) $old = trim($old);
+			if (is_string($new)) $new = trim($new);
+	
+			// ACF true_false e select possono arrivare come stringhe
+			if ($old !== $new) {
+				$changes[$meta_key] = ['from' => $old, 'to' => $new];
+			}
+		}
+	
+		if ($changes) {
+			self::$pending_diffs[$post_id] = ['changes' => $changes];
+		}
+	}
 
 
 }
