@@ -54,6 +54,8 @@ class SPM_Contract_Handler {
 
 		// Hook salvataggio contratto
 		add_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
+		add_action('wp_ajax_spm_acf_save', [__CLASS__, 'ajax_acf_save']);
+
 		
 		// AJAX per recupero dati servizio
 		add_action('wp_ajax_spm_get_servizio_defaults', [__CLASS__, 'ajax_get_servizio_defaults']);
@@ -149,10 +151,25 @@ class SPM_Contract_Handler {
 			wp_enqueue_script(
 				'spm-native-save',
 				plugin_dir_url(__FILE__) . '../assets/js/spm-native-save.js',
-				[], // nessuna dipendenza obbligatoria
+				['jquery','acf-input'], // nessuna dipendenza obbligatoria
 				'1.0.0',
 				true
 			);
+			
+			// Ricava l'ID del post in modo robusto
+			$post_id = 0;
+			if (!empty($_GET['post'])) {
+				$post_id = (int) $_GET['post']; // post.php
+			} elseif (!empty($GLOBALS['post']->ID)) {
+				$post_id = (int) $GLOBALS['post']->ID; // fallback
+			}
+			
+			wp_localize_script('spm-native-save', 'SPM_VARS', [
+				'postId'              => $post_id,
+				'ajaxUrl'             => admin_url('admin-ajax.php'),
+				'nonceAcfSave'        => wp_create_nonce('spm_acf_save'),
+				'nonceContractAction' => wp_create_nonce('spm_contract_action'),
+			]);
 			
 			
 		}
@@ -209,8 +226,14 @@ class SPM_Contract_Handler {
 		// 1) Normalizza date
 		self::normalize_dates($post_id);
 	
-		// 2) SEMPRE ricalcola scadenza (non è più editabile)
-		self::force_calculate_scadenza($post_id);
+		// // 2) SEMPRE ricalcola scadenza (non è più editabile)
+		// self::force_calculate_scadenza($post_id);
+			
+		// 2) Ricalcolo scadenza CONDIZIONALE:
+		//    - Primo salvataggio o valore mancante -> calcola
+		//    - Dal secondo salvataggio in poi, se data_prossima_scadenza è già valorizzata -> NON ricalcolare
+		self::maybe_calculate_scadenza($post_id);	
+		
 	
 		// --- DECISIONE PRIMO LOG PRIMA DI UPDATE_STATO ---
 		$storico = get_field('storico_contratto', $post_id);
@@ -963,37 +986,66 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			<?php endif; ?>
 		</div>
 	
-		<script>
-		jQuery(document).ready(function($) {
-			$('.spm-action').on('click', function(e) {
-				e.preventDefault();
-				var btn = $(this);
-				var action = btn.data('action');
-				var id = btn.data('id');
+	<script>
+	jQuery(document).ready(function($) {
+	  $('.spm-action').on('click', function(e) {
+		e.preventDefault();
+		var btn = $(this);
+		var action = btn.data('action');
+		var id = btn.data('id');
 	
-				if (action === 'cessa' && !confirm('Sei sicuro di voler cessare definitivamente il contratto?')) {
-					return;
-				}
+		console.log('[SPM] click action=%s postId=%s', action, id);
 	
-				btn.prop('disabled', true).text('Elaborazione...');
+		// ⛔ Lascialo allo script esterno (che fa: Salva ACF → Rinnova)
+		if (action === 'rinnova') {
+		  console.log('[SPM] rinnova delegato a script esterno');
+		  return;
+		}
 	
-				$.post(ajaxurl, {
-					action: 'spm_contract_action',
-					contract_action: action,
-					post_id: id,
-					_wpnonce: '<?php echo wp_create_nonce('spm_contract_action'); ?>'
-				}, function(response) {
-					if (response.success) {
-						alert(response.data.message);
-						location.reload();
-					} else {
-						alert('Errore: ' + (response.data?.message || 'Operazione fallita'));
-						btn.prop('disabled', false);
-					}
-				});
-			});
+		if (action === 'cessa' && !confirm('Sei sicuro di voler cessare definitivamente il contratto?')) {
+		  console.log('[SPM] cessa annullato dall’utente');
+		  return;
+		}
+	
+		var oldLabel = btn.text();
+		btn.prop('disabled', true).text('Elaborazione…');
+		var t0 = performance.now();
+	
+		console.log('[SPM] ajax POST start', {action, id});
+	
+		$.post(ajaxurl, {
+		  action: 'spm_contract_action',
+		  contract_action: action,
+		  post_id: id,
+		  _wpnonce: '<?php echo wp_create_nonce('spm_contract_action'); ?>'
+		})
+		.done(function(response) {
+		  var ms = Math.round(performance.now() - t0);
+		  console.log('[SPM] ajax POST done', {action, id, ms, response});
+		  if (response.success) {
+			alert(response.data.message);
+			location.reload();
+		  } else {
+			var msg = (response.data && response.data.message) ? response.data.message : 'Operazione fallita';
+			console.error('[SPM] ajax POST error', {action, id, msg});
+			alert('Errore: ' + msg);
+			btn.prop('disabled', false).text(oldLabel);
+		  }
+		})
+		.fail(function(jqXHR, textStatus, errorThrown) {
+		  var ms = Math.round(performance.now() - t0);
+		  console.error('[SPM] ajax POST FAIL', {
+			action, id, ms,
+			textStatus, errorThrown,
+			responseText: jqXHR.responseText
+		  });
+		  alert('Errore di rete o permessi');
+		  btn.prop('disabled', false).text(oldLabel);
 		});
-		</script>
+	  });
+	});
+	</script>
+
 		<?php
 	}
 
@@ -1452,6 +1504,55 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			self::$pending_diffs[$post_id] = ['changes' => $changes];
 		}
 	}
+	
+	/**
+	 * Ricalcola la scadenza solo quando serve:
+	 * - post nuovo (auto-draft/draft) O
+	 * - campo data_prossima_scadenza vuoto/non ancora inizializzato
+	 */
+	private static function maybe_calculate_scadenza($post_id) {
+		$status   = get_post_status($post_id);
+		$has_date = (bool) get_field('data_prossima_scadenza', $post_id);
+	
+		if (in_array($status, ['auto-draft','draft'], true) || !$has_date) {
+			self::force_calculate_scadenza($post_id);
+		}
+		// altrimenti, non toccare la scadenza durante i salvataggi successivi
+	}
+	
+	
+	public static function ajax_acf_save() {
+		check_ajax_referer('spm_acf_save', '_wpnonce');
+	
+		$post_id = intval($_POST['post_id'] ?? 0);
+		if (!$post_id || get_post_type($post_id) !== 'contratti') {
+			wp_send_json_error(['message' => 'Post non valido']);
+		}
+		if (!current_user_can('edit_post', $post_id)) {
+			wp_send_json_error(['message' => 'Non autorizzato']);
+		}
+	
+		// campi ACF serializzati come array field_key => value
+		$fields = isset($_POST['fields']) && is_array($_POST['fields']) ? $_POST['fields'] : [];
+	
+		// Valida minimo indispensabile
+		if (empty($fields)) {
+			wp_send_json_error(['message' => 'Nessun dato da salvare']);
+		}
+	
+		// Scrive i meta ACF (usa field_keys!).
+		if (function_exists('acf_update_values')) {
+			acf_update_values($fields, $post_id);
+		} else {
+			// fallback (ACF <5.7) se mai servisse:
+			foreach ($fields as $field_key => $value) {
+				acf_update_value($value, $post_id, $field_key);
+			}
+		}
+	
+		wp_send_json_success(['message' => 'Dati ACF salvati']);
+	}
+
 
 
 }
