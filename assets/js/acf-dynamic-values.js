@@ -130,8 +130,8 @@
             console.log('📅 Frequenza FORZATA a:', data.frequenza_ricorrenza);
           }
 
-          // NEW: cadenza fatture dal servizio (se presente e il campo è vuoto)
-          if ($cadenzaField && !$cadenzaField.val() && data.cadenza_fatturazione_default !== undefined) {
+          // NEW: cadenza fatture dal servizio
+          if ($cadenzaField && data.cadenza_fatturazione_default != null) {
             $cadenzaField.$input().val(data.cadenza_fatturazione_default).trigger('change');
             console.log('🧾 Cadenza fatture impostata da servizio:', data.cadenza_fatturazione_default);
           }
