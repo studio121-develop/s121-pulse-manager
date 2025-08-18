@@ -37,6 +37,11 @@ require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-contratti.php';  // NUO
 require_once plugin_dir_path(__FILE__) . 'includes/class-date-helper.php';  // NUOVO
 require_once plugin_dir_path(__FILE__) . 'includes/class-contract-handler.php';  // NUOVO
 require_once plugin_dir_path(__FILE__) . 'includes/spm-list-inline-actions.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-statistics-handler.php';
+
+register_activation_hook(__FILE__, function() {
+    SPM_Statistics_Handler::instance()->maybe_install();
+});
 
 
 // ==========================================================
@@ -106,3 +111,42 @@ function spm_render_main_dashboard() {
     wp_redirect(admin_url('edit.php?post_type=contratti&page=contratti-dashboard'));
     exit;
 }
+
+
+// Admin trigger per backfill (solo admin)
+add_action('admin_init', function () {
+    if (!current_user_can('manage_options')) return;
+
+    // Esempi:
+    // ?spm_backfill=all
+    // ?spm_backfill=contract&cid=123
+    // ?spm_backfill=range&from=2024-01&to=2025-08
+    if (!isset($_GET['spm_backfill'])) return;
+
+    $act = sanitize_text_field($_GET['spm_backfill']);
+    $handler = SPM_Statistics_Handler::instance();
+
+    if ($act === 'all') {
+        $from = isset($_GET['from']) ? sanitize_text_field($_GET['from']) : null;
+        $to   = isset($_GET['to'])   ? sanitize_text_field($_GET['to'])   : null;
+        $res = $handler->backfill_all($from, $to);
+        wp_die('Backfill ALL completato: ' . esc_html(json_encode($res)));
+    }
+
+    if ($act === 'contract') {
+        $cid  = isset($_GET['cid']) ? (int) $_GET['cid'] : 0;
+        if ($cid <= 0) wp_die('CID mancante');
+        $from = isset($_GET['from']) ? sanitize_text_field($_GET['from']) : null;
+        $to   = isset($_GET['to'])   ? sanitize_text_field($_GET['to'])   : null;
+        $n = $handler->backfill_contract($cid, $from, $to);
+        wp_die('Backfill contratto #' . $cid . ' righe generate: ' . (int)$n);
+    }
+
+    if ($act === 'range') {
+        $from = isset($_GET['from']) ? sanitize_text_field($_GET['from']) : null;
+        $to   = isset($_GET['to'])   ? sanitize_text_field($_GET['to'])   : null;
+        if (!$from || !$to) wp_die('from/to mancanti');
+        $res = $handler->backfill_all($from, $to);
+        wp_die('Backfill RANGE completato: ' . esc_html(json_encode($res)));
+    }
+});

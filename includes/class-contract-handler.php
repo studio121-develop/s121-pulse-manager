@@ -1,28 +1,23 @@
 <?php
 /**
  * Contract Handler - Gestione Migliorata Contratti
- * 
+ *
  * Migliorie implementate:
  * 1. Data scadenza sempre calcolata automaticamente
  * 2. Storico completo di tutte le operazioni
  * 3. Log dettagliato con data/ora/utente
  * 4. Precompilazione automatica da servizio
+ * 5. Aggiornamento KPI/MRR/ARR/ARPU (materialized) ad ogni evento rilevante
  */
 
 defined('ABSPATH') || exit;
 
 class SPM_Contract_Handler {
-	
-	private static $is_saving = false; // Previeni loop infiniti
-	private static $pending_diffs = []; 
 
-	// // --- POLICY CONTRATTI ---
-	// // entro questa soglia è "scaduto poco" -> rinnovo consentito con allineamento
-	// private const TOLLERANZA_SCADUTO_GIORNI = 60;
-	// // oltre questa soglia è "scaduto troppo" -> considerato cessato
-	// private const AUTO_CESSAZIONE_GIORNI    = 90;
-	
-	// // --- POLICY CONTRATTI ---
+	private static $is_saving = false; // Previeni loop infiniti
+	private static $pending_diffs = [];
+
+	// --- POLICY CONTRATTI (lettura da settings) ---
 	private static function get_tolleranza_scaduto_giorni() {
 		if (class_exists('SPM_Settings_Page')) {
 			return (int) SPM_Settings_Page::get('tolleranza_scaduto_giorni');
@@ -36,11 +31,19 @@ class SPM_Contract_Handler {
 		return 90; // fallback
 	}
 
+	/**
+	 * Aggiorna la riga storico del mese corrente e il KPI per il mese (idempotente).
+	 * Chiama SPM_Statistics_Handler solo se presente.
+	 */
+	private static function stats_touch_month(int $post_id, ?string $yyyymm = null) : void {
+		if (!class_exists('SPM_Statistics_Handler')) return;
+		$ym = $yyyymm ?: current_time('Y-m');
+		SPM_Statistics_Handler::instance()->materialize_month($post_id, $ym);
+	}
 
 	/**
 	 * Avanza la scadenza di N periodi finché non è > oggi.
-	 * Ritorna array [$nuovaData, $passiEffettuati].
-	 * Limite di sicurezza 120 per evitare loop.
+	 * Ritorna array [$nuovaData, $passiEffettuati]. Limite 120 per evitare loop.
 	 */
 	private static function roll_forward_due_date($from_date, $frequenza) {
 		$next  = $from_date;
@@ -53,111 +56,97 @@ class SPM_Contract_Handler {
 		}
 		// se era nel futuro già all'inizio, garantisci almeno 1 passo per casi attivi
 		if ($steps === 0 && !SPM_Date_Helper::is_expired($from_date)) {
-			$next = SPM_Date_Helper::calculate_next_due_date($from_date, $frequenza);
+			$next  = SPM_Date_Helper::calculate_next_due_date($from_date, $frequenza);
 			$steps = 1;
 		}
 		return [$next, $steps];
 	}
-	
+
 	/**
 	 * Inizializza la classe
 	 */
 	public static function init() {
-	
+
 		add_action('acf/save_post', [__CLASS__, 'pre_acf_capture_diffs'], 1);
 
 		// Hook salvataggio contratto
 		add_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
 		add_action('wp_ajax_spm_acf_save', [__CLASS__, 'ajax_acf_save']);
 
-		
 		// AJAX per recupero dati servizio
 		add_action('wp_ajax_spm_get_servizio_defaults', [__CLASS__, 'ajax_get_servizio_defaults']);
-		
+
 		// Cron giornaliero
 		add_action('spm_daily_check', [__CLASS__, 'daily_check']);
-		
+
 		// Azioni AJAX per pulsanti
 		add_action('wp_ajax_spm_contract_action', [__CLASS__, 'handle_ajax_action']);
-		
+
 		// Colonne admin
 		add_filter('manage_contratti_posts_columns', [__CLASS__, 'add_admin_columns']);
 		add_action('manage_contratti_posts_custom_column', [__CLASS__, 'render_admin_columns'], 10, 2);
-		
+
 		add_filter('manage_edit-contratti_sortable_columns', [__CLASS__, 'add_sortable_columns']);
 		add_action('pre_get_posts', [__CLASS__, 'handle_sortable_and_filters']);
-		
+
 		add_action('restrict_manage_posts', [__CLASS__, 'add_admin_filters']); // UI filtri
 		add_filter('parse_query', [__CLASS__, 'apply_admin_filters']);         // Logica filtri
-		
+
 		// --- LOCK UI ACF (cliente/servizio dopo creazione; stato se cessato)
 		add_filter('acf/prepare_field/name=cliente',  [__CLASS__, 'acf_lock_cliente']);
 		add_filter('acf/prepare_field/name=servizio', [__CLASS__, 'acf_lock_servizio']);
 		add_filter('acf/prepare_field/name=stato',    [__CLASS__, 'acf_lock_stato_if_cessato']);
-		add_filter('acf/prepare_field/name=data_attivazione', [__CLASS__, 'acf_lock_data_attivazione']);
-
-		
 		add_action('admin_head',                      [__CLASS__, 'admin_css_locked_fields']);
-		
+
 		// --- ENFORCEMENT SERVER-SIDE (ignora modifiche non permesse)
 		add_filter('acf/update_value/name=cliente',   [__CLASS__, 'acf_enforce_cliente'], 10, 3);
 		add_filter('acf/update_value/name=servizio',  [__CLASS__, 'acf_enforce_servizio'], 10, 3);
 		add_filter('acf/update_value/name=stato',     [__CLASS__, 'acf_enforce_stato'],    10, 3);
-		add_filter('acf/update_value/name=data_attivazione',  [__CLASS__, 'acf_enforce_data_attivazione'], 10, 3);
 
-		
 		// --- Rimuovi "Modifica rapida" dalla lista (può bypassare ACF)
 		add_filter('post_row_actions',                [__CLASS__, 'remove_quick_edit'], 10, 2);
 
+		// Sync statistiche (servizio + KPI) quando il post cambia "esistenza"
 		add_action('wp_trash_post',      [__CLASS__, 'on_trash_untrash_delete']);
 		add_action('untrash_post',       [__CLASS__, 'on_trash_untrash_delete']);
 		add_action('before_delete_post', [__CLASS__, 'on_trash_untrash_delete']);
-		
-		// --- SYNC STATS SERVIZI (trash / untrash / delete contratti)
-		add_action('wp_trash_post',       [__CLASS__, 'on_trash_untrash_delete']);  // cestina contratto → aggiorna stats servizio
-		add_action('untrash_post',        [__CLASS__, 'on_trash_untrash_delete']);  // ripristina contratto → aggiorna stats servizio
-		add_action('before_delete_post',  [__CLASS__, 'on_trash_untrash_delete']);  // elimina definitivamente → aggiorna stats servizio
-
 
 		// Metabox azioni
-		// add_action('add_meta_boxes', [__CLASS__, 'add_action_metabox']);
 		add_action('add_meta_boxes_contratti', [__CLASS__, 'add_action_metabox']);
-		// add_action('do_meta_boxes', function() {remove_meta_box('submitdiv', 'contratti', 'side');});
 		add_action('admin_head-post.php', function(){
-		  global $post;
-		  if ($post && $post->post_type === 'contratti') {
-			echo '<style>#submitdiv{display:none!important;}</style>';
-		  }
+			global $post;
+			if ($post && $post->post_type === 'contratti') {
+				echo '<style>#submitdiv{display:none!important;}</style>';
+			}
 		});
 		add_action('admin_head-post-new.php', function(){
-		  $screen = get_current_screen();
-		  if ($screen && $screen->post_type === 'contratti') {
-			echo '<style>#submitdiv{display:none!important;}</style>';
-		  }
+			$screen = get_current_screen();
+			if ($screen && $screen->post_type === 'contratti') {
+				echo '<style>#submitdiv{display:none!important;}</style>';
+			}
 		});
-		
-		
+
 		// Nascondi/lock pulsante Aggiorna (Classic + Gutenberg) quando cessato
 		add_action('admin_head-post.php', [__CLASS__, 'admin_head_hide_update_for_cessati']);
-		
+
 		// Disattiva autosave/heartbeat (evita salvataggi impliciti) quando cessato
 		add_action('admin_enqueue_scripts', [__CLASS__, 'disable_autosave_for_cessati']);
-		
+
 		// Script admin
 		add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_admin_scripts']);
-		
+
 		// Schedula cron se non esiste
 		if (!wp_next_scheduled('spm_daily_check')) {
 			wp_schedule_event(strtotime('tomorrow 8am'), 'daily', 'spm_daily_check');
 		}
 	}
-	
+
 	/**
 	 * Enqueue script admin
 	 */
 	public static function enqueue_admin_scripts($hook) {
 		global $post_type;
-		
+
 		if ($post_type === 'contratti') {
 			wp_enqueue_script(
 				'spm-acf-dynamic',
@@ -166,15 +155,15 @@ class SPM_Contract_Handler {
 				'2.0.0',
 				true
 			);
-			
+
 			wp_enqueue_script(
 				'spm-native-save',
 				plugin_dir_url(__FILE__) . '../assets/js/spm-native-save.js',
-				['jquery','acf-input'], // nessuna dipendenza obbligatoria
+				['jquery','acf-input'],
 				'1.0.0',
 				true
 			);
-			
+
 			// Ricava l'ID del post in modo robusto
 			$post_id = 0;
 			if (!empty($_GET['post'])) {
@@ -182,51 +171,47 @@ class SPM_Contract_Handler {
 			} elseif (!empty($GLOBALS['post']->ID)) {
 				$post_id = (int) $GLOBALS['post']->ID; // fallback
 			}
-			
+
 			wp_localize_script('spm-native-save', 'SPM_VARS', [
 				'postId'              => $post_id,
 				'ajaxUrl'             => admin_url('admin-ajax.php'),
 				'nonceAcfSave'        => wp_create_nonce('spm_acf_save'),
 				'nonceContractAction' => wp_create_nonce('spm_contract_action'),
 			]);
-			
-			
 		}
-		
-		
 	}
-	
+
 	/**
 	 * AJAX: Recupera defaults dal servizio selezionato
 	 */
 	public static function ajax_get_servizio_defaults() {
-		// Verifica nonce e permessi
+		// Verifica permessi
 		if (!current_user_can('edit_posts')) {
 			wp_send_json_error(['message' => 'Non autorizzato']);
 		}
-		
+
 		$servizio_id = intval($_POST['servizio_id'] ?? 0);
 		if (!$servizio_id) {
 			wp_send_json_error(['message' => 'ID servizio non valido']);
 		}
-		
+
 		// Recupera dati servizio
 		$data = [
-			'prezzo_base' => get_field('prezzo_base', $servizio_id),
-			'cadenza_fatturazione_default' => get_field('cadenza_fatturazione_default', $servizio_id),
-			'frequenza_ricorrenza' => get_field('frequenza_ricorrenza', $servizio_id),
-			'giorni_pre_reminder' => get_field('giorni_pre_reminder', $servizio_id),
-			'descrizione_admin' => get_field('descrizione_admin', $servizio_id),
+			'prezzo_base'                 => get_field('prezzo_base', $servizio_id),
+			'cadenza_fatturazione_default'=> get_field('cadenza_fatturazione_default', $servizio_id),
+			'frequenza_ricorrenza'        => get_field('frequenza_ricorrenza', $servizio_id),
+			'giorni_pre_reminder'         => get_field('giorni_pre_reminder', $servizio_id),
+			'descrizione_admin'           => get_field('descrizione_admin', $servizio_id),
 		];
-		
+
 		// Filtra valori nulli/vuoti
 		$data = array_filter($data, function($value) {
 			return $value !== null && $value !== '';
 		});
-		
+
 		wp_send_json_success($data);
 	}
-	
+
 	/**
 	 * Quando si salva un contratto
 	 */
@@ -234,31 +219,24 @@ class SPM_Contract_Handler {
 		if (get_post_type($post_id) !== 'contratti' || self::$is_saving) {
 			return;
 		}
-	
+
 		// Evita salvataggi "fantasma"
 		if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
 			return;
 		}
-		
+
 		self::$is_saving = true;
-	
+
 		// 1) Normalizza date
 		self::normalize_dates($post_id);
-	
-		// // 2) SEMPRE ricalcola scadenza (non è più editabile)
-		// self::force_calculate_scadenza($post_id);
-			
-		// 2) Ricalcolo scadenza CONDIZIONALE:
-		//    - Primo salvataggio o valore mancante -> calcola
-		//    - Dal secondo salvataggio in poi, se data_prossima_scadenza è già valorizzata -> NON ricalcolare
-		self::maybe_calculate_scadenza($post_id);	
-		
-	
-		// --- DECISIONE PRIMO LOG PRIMA DI UPDATE_STATO ---
+
+		// 2) Ricalcolo scadenza condizionale
+		self::maybe_calculate_scadenza($post_id);
+
+		// 3) Primo log?
 		$storico = get_field('storico_contratto', $post_id);
 		$is_first_log = empty($storico) || (is_array($storico) && count($storico) === 0);
-	
-		// 3) Se è il primo salvataggio, logga subito "creazione"
+
 		if ($is_first_log) {
 			$ctx = [
 				'data_inizio'       => get_field('data_attivazione', $post_id),
@@ -266,14 +244,14 @@ class SPM_Contract_Handler {
 			];
 			self::log_operazione($post_id, 'creazione', null, '', $ctx);
 		}
-	
-		// 4) Aggiorna stato basato su scadenza (potrebbe loggare "scadenza" o "cessazione auto")
+
+		// 4) Aggiorna stato
 		self::update_stato($post_id);
-	
-		// 5) Imposta titolo automatico
+
+		// 5) Titolo automatico
 		self::set_contract_title($post_id);
-	
-		// 6) Se NON era il primo salvataggio, logga "modifica"
+
+		// 6) Log "modifica" se non era il primo
 		if (!$is_first_log) {
 			$diff = self::$pending_diffs[$post_id]['changes'] ?? null;
 			if ($diff) {
@@ -283,10 +261,16 @@ class SPM_Contract_Handler {
 				self::log_operazione($post_id, 'modifica', null, 'Contratto modificato');
 			}
 		}
+
+		// 7) Aggiorna KPI mese corrente
+		self::stats_touch_month((int)$post_id);
+
+		// 8) Aggiorna stats servizio (se usate)
 		self::touch_servizio_stats($post_id);
+
 		self::$is_saving = false;
 	}
-	
+
 	private static function touch_servizio_stats($contract_id){
 		$servizio_id = get_field('servizio', $contract_id);
 		if ($servizio_id && function_exists('spm_update_servizio_stats')) {
@@ -294,13 +278,12 @@ class SPM_Contract_Handler {
 		}
 	}
 
-	
 	/**
 	 * Normalizza le date al formato standard
 	 */
 	private static function normalize_dates($post_id) {
 		$date_fields = ['data_attivazione', 'data_prossima_scadenza'];
-		
+
 		foreach ($date_fields as $field) {
 			$value = get_field($field, $post_id);
 			if ($value) {
@@ -311,22 +294,20 @@ class SPM_Contract_Handler {
 			}
 		}
 	}
-	
+
 	/**
 	 * FORZA il calcolo della scadenza (sempre, anche se presente)
 	 */
 	private static function force_calculate_scadenza($post_id) {
 		$data_attivazione = get_field('data_attivazione', $post_id);
 		$frequenza = get_field('frequenza', $post_id);
-		
+
 		if ($data_attivazione && $frequenza) {
 			$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($data_attivazione, $frequenza);
-			
-			// Aggiorna sempre, ignorando valore esistente
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 		}
 	}
-	
+
 	/**
 	 * Aggiorna stato basato su scadenza (con auto-cessazione oltre soglia)
 	 */
@@ -335,7 +316,7 @@ class SPM_Contract_Handler {
 		$stato    = get_field('stato', $post_id);
 
 		// Non toccare stati finali manuali
-		if (in_array($stato, ['cessato'])) {
+		if (in_array($stato, ['cessato'], true)) {
 			return;
 		}
 
@@ -344,58 +325,57 @@ class SPM_Contract_Handler {
 			$days_since = SPM_Date_Helper::days_since_due($scadenza);
 
 			// 1) Se troppo arretrato -> auto-cessato e stop
-			// Auto-cessazione
 			if ($is_expired && $days_since !== null && $days_since > self::get_auto_cessazione_giorni()) {
 				update_field('stato', 'cessato', $post_id);
+				// AGGIUNTA: data_cessazione alla data odierna (solo se non già presente)
+				if (!get_field('data_cessazione', $post_id)) {
+					update_field('data_cessazione', current_time('Y-m-d'), $post_id);
+				}
 				self::log_operazione($post_id, 'cessazione', 0, '', ['days_since' => $days_since]);
+				self::stats_touch_month((int)$post_id);
 				return;
 			}
 
-			// 2) Altrimenti, stato coerente con la data
-			// Passa a scaduto
+			// 2) Stato coerente con la data
 			if ($is_expired) {
 				if ($stato !== 'scaduto' && $stato !== 'sospeso') {
 					update_field('stato', 'scaduto', $post_id);
 					self::log_operazione($post_id, 'scadenza', null, '', ['trigger' => 'auto']);
+					self::stats_touch_month((int)$post_id);
 				}
 			} else {
-				// Da scaduto a attivo
 				if ($stato === 'scaduto') {
 					update_field('stato', 'attivo', $post_id);
 					self::log_operazione($post_id, 'riattivazione', null, '', ['nuovo_stato' => 'attivo']);
+					self::stats_touch_month((int)$post_id);
 				}
 			}
 		}
 	}
-	
+
 	/**
 	 * Imposta titolo automatico del contratto
 	 */
 	private static function set_contract_title($post_id) {
-		$cliente_id = get_field('cliente', $post_id);
+		$cliente_id  = get_field('cliente',  $post_id);
 		$servizio_id = get_field('servizio', $post_id);
-		
+
 		if ($cliente_id && $servizio_id) {
-			$cliente_nome = get_the_title($cliente_id);
+			$cliente_nome  = get_the_title($cliente_id);
 			$servizio_nome = get_the_title($servizio_id);
-			
+
 			$title = sprintf('#%d - %s - %s', $post_id, $cliente_nome, $servizio_nome);
-			
+
 			// Evita loop infinito
 			remove_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
-			
-			wp_update_post([
-				'ID' => $post_id,
-				'post_title' => $title
-			]);
-			
+			wp_update_post(['ID' => $post_id, 'post_title' => $title]);
 			add_action('acf/save_post', [__CLASS__, 'on_contract_save'], 20);
 		}
 	}
-	
-private static function log_operazione($post_id, $tipo_operazione, $importo = null, $note = '', $context = []) {
+
+	private static function log_operazione($post_id, $tipo_operazione, $importo = null, $note = '', $context = []) {
 		$storico = get_field('storico_contratto', $post_id) ?: [];
-	
+
 		// Importo robusto
 		if ($importo === null) {
 			$val = get_field('prezzo_contratto', $post_id);
@@ -407,15 +387,15 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				$importo = ($val !== '' && $val !== null) ? $val : 0;
 			}
 		}
-	
+
 		// Autogenera nota se non fornita
 		if ($note === '' && !empty($context)) {
 			$note = self::build_note_from_context($tipo_operazione, $context, $post_id);
 		}
-	
+
 		$current_user = wp_get_current_user();
 		$utente = $current_user->display_name ?: 'Sistema';
-	
+
 		$storico_entry = [
 			'data_operazione' => date('Y-m-d'),
 			'ora_operazione'  => date('H:i'),
@@ -424,16 +404,16 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			'utente'          => $utente,
 			'note'            => $note
 		];
-	
+
 		array_unshift($storico, $storico_entry);
 		$storico = array_slice($storico, 0, 50);
-	
+
 		update_field('storico_contratto', $storico, $post_id);
 	}
-	
+
 	private static function build_note_from_context($tipo, array $ctx, $post_id) {
 		$fmt = function($ymd) { return $ymd ? SPM_Date_Helper::to_display_format($ymd) : '—'; };
-	
+
 		switch ($tipo) {
 			case 'creazione': {
 				$inizio = $fmt($ctx['data_inizio']        ?? get_field('data_attivazione', $post_id));
@@ -483,20 +463,21 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			default: return '';
 		}
 	}
+
 	/**
 	 * RINNOVA CONTRATTO - Policy: attivo = +1; scaduto poco = allinea; scaduto troppo = cessato, no rinnovo
 	 */
 	public static function rinnova_contratto($post_id) {
 		$stato = get_field('stato', $post_id);
-		
+
 		// Verifica se rinnovabile
 		if ($stato === 'cessato') {
 			return ['success' => false, 'message' => 'Contratto cessato: rinnovo non consentito'];
 		}
-		
+
 		$scadenza_attuale = get_field('data_prossima_scadenza', $post_id);
 		$frequenza        = get_field('frequenza', $post_id);
-		
+
 		if (!$scadenza_attuale || !$frequenza) {
 			return ['success' => false, 'message' => 'Dati mancanti per il rinnovo'];
 		}
@@ -506,7 +487,12 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		// CASO 3: SCADUTO TROPPO -> consideralo cessato e blocca
 		if ($days_since !== null && $days_since > self::get_auto_cessazione_giorni()) {
 			update_field('stato', 'cessato', $post_id);
+			// AGGIUNTA
+			if (!get_field('data_cessazione', $post_id)) {
+				update_field('data_cessazione', current_time('Y-m-d'), $post_id);
+			}
 			self::log_operazione($post_id, 'cessazione', 0, "Blocco rinnovo: scaduto da {$days_since} giorni (soglia " . self::get_auto_cessazione_giorni() . ").");
+			self::stats_touch_month((int)$post_id);
 			self::touch_servizio_stats($post_id);
 			return ['success' => false, 'message' => 'Contratto scaduto da troppo tempo: considerato cessato. Non rinnovabile.'];
 		}
@@ -518,16 +504,15 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			$val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
 			$importo = ($val !== '' && $val !== null) ? $val : 0;
 		}
-		
+
 		$old_scad = $scadenza_attuale;
-		
+
 		// CASO 1: ATTIVO (scadenza oggi o futuro) -> +1 periodo
-		// Caso attivo: +1
 		if ($days_since !== null && $days_since <= 0) {
 			$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 			update_field('stato', 'attivo', $post_id);
-		
+
 			self::log_operazione(
 				$post_id,
 				'rinnovo_manuale',
@@ -535,19 +520,20 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				'',
 				['scadenza_precedente' => $old_scad, 'scadenza_nuova' => $nuova_scadenza, 'steps' => 1]
 			);
+
+			self::stats_touch_month((int)$post_id);
 			self::touch_servizio_stats($post_id);
-		
+
 			return ['success' => true, 'message' => 'Contratto rinnovato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)];
 		}
 
 		// CASO 2: SCADUTO POCO (entro tolleranza) -> allinea oltre oggi (catch-up)
-		// Catch-up entro tolleranza
 		if ($days_since !== null && $days_since > 0 && $days_since <= self::get_tolleranza_scaduto_giorni()) {
 			[$nuova_scadenza, $steps] = self::roll_forward_due_date($scadenza_attuale, $frequenza);
-		
+
 			update_field('data_prossima_scadenza', $nuova_scadenza, $post_id);
 			update_field('stato', 'attivo', $post_id);
-		
+
 			self::log_operazione(
 				$post_id,
 				'rinnovo_manuale',
@@ -555,97 +541,107 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				'',
 				['scadenza_precedente' => $old_scad, 'scadenza_nuova' => $nuova_scadenza, 'steps' => (int)max(1,$steps)]
 			);
+
+			self::stats_touch_month((int)$post_id);
 			self::touch_servizio_stats($post_id);
-		
+
 			return ['success' => true, 'message' => 'Contratto allineato. Scadenza: ' . SPM_Date_Helper::to_display_format($nuova_scadenza)];
 		}
-		
+
 		// Fallback teorico
 		return ['success' => false, 'message' => 'Impossibile rinnovare in questo stato.'];
 	}
-	
+
 	/**
 	 * SOSPENDI CONTRATTO
 	 */
 	public static function sospendi_contratto($post_id) {
 		$stato_precedente = get_field('stato', $post_id);
-		
+
 		update_field('stato', 'sospeso', $post_id);
 		self::log_operazione($post_id, 'sospensione', null, "Contratto sospeso (era: $stato_precedente)");
+
+		self::stats_touch_month((int)$post_id);
 		self::touch_servizio_stats($post_id);
+
 		return ['success' => true, 'message' => 'Contratto sospeso con successo'];
 	}
-	
+
 	/**
 	 * RIATTIVA CONTRATTO
 	 */
 	public static function riattiva_contratto($post_id) {
 		$scadenza = get_field('data_prossima_scadenza', $post_id);
-		
+
 		// Verifica se scaduto
 		$nuovo_stato = SPM_Date_Helper::is_expired($scadenza) ? 'scaduto' : 'attivo';
-		
+
 		update_field('stato', $nuovo_stato, $post_id);
-		
 		self::log_operazione($post_id, 'riattivazione', null, "Contratto riattivato con stato: $nuovo_stato");
+
+		self::stats_touch_month((int)$post_id);
 		self::touch_servizio_stats($post_id);
+
 		return ['success' => true, 'message' => "Contratto riattivato (stato: $nuovo_stato)"];
 	}
-	
+
 	/**
 	 * CESSA CONTRATTO
 	 */
 	public static function cessa_contratto($post_id) {
 		$stato_precedente = get_field('stato', $post_id);
-		
+
 		update_field('stato', 'cessato', $post_id);
-		
+		// AGGIUNTA: fissa la data del click
+		update_field('data_cessazione', current_time('Y-m-d'), $post_id);
 		self::log_operazione($post_id, 'cessazione', null, "Contratto cessato definitivamente (era: $stato_precedente)");
+
+		self::stats_touch_month((int)$post_id);
 		self::touch_servizio_stats($post_id);
+
 		return ['success' => true, 'message' => 'Contratto cessato definitivamente'];
 	}
-	
+
 	/**
 	 * CHECK GIORNALIERO
 	 */
 	public static function daily_check() {
 		// 1. Aggiorna stati contratti scaduti
 		self::check_contratti_scaduti();
-		
+
 		// 2. Processa rinnovi automatici
 		self::processa_rinnovi_automatici();
-		
-		// 3. Invia reminder
+
+		// 3. Invia reminder (disabilitato per ora)
 		self::invia_reminder();
 	}
-	
+
 	/**
 	 * Controlla contratti scaduti
 	 */
 	private static function check_contratti_scaduti() {
 		$args = [
-		  'post_type'      => 'contratti',
-		  'posts_per_page' => -1,
-		  'meta_query'     => [
-			[
-			  'key'     => 'stato',
-			  'value'   => ['attivo', 'scaduto'],
-			  'compare' => 'IN',
+			'post_type'      => 'contratti',
+			'posts_per_page' => -1,
+			'meta_query'     => [
+				[
+					'key'     => 'stato',
+					'value'   => ['attivo', 'scaduto'],
+					'compare' => 'IN',
+				],
 			],
-		  ],
 		];
-		
+
 		$query = new WP_Query($args);
-		
+
 		if ($query->have_posts()) {
 			foreach ($query->posts as $post) {
 				$old_stato = get_field('stato', $post->ID);
 				self::update_stato($post->ID);
-				
-				// Se cambiato stato, logga
+
+				// Se cambiato stato, logga e aggiorna KPI
 				$new_stato = get_field('stato', $post->ID);
 				if ($old_stato !== $new_stato) {
-					// Evita doppio log se update_stato ha già loggato la cessazione
 					if ($new_stato !== 'cessato') {
 						self::log_operazione(
 							$post->ID,
@@ -654,68 +650,63 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 							'Stato aggiornato automaticamente da controllo giornaliero'
 						);
 					}
+					self::stats_touch_month((int)$post->ID);
 					self::touch_servizio_stats($post->ID);
 				}
-				
 			}
 		}
 	}
-	
+
 	/**
 	 * Processa rinnovi automatici
 	 */
 	private static function processa_rinnovi_automatici() {
 		$args = [
-			'post_type' => 'contratti',
+			'post_type'      => 'contratti',
 			'posts_per_page' => -1,
-			'meta_query' => [
+			'meta_query'     => [
 				'relation' => 'AND',
-				[
-					'key' => 'rinnovo_automatico',
-					'value' => '1'
-				],
-				[
-					'key' => 'stato',
-					'value' => ['attivo', 'scaduto'],
-					'compare' => 'IN'
-				],
-				[
-					'key' => 'data_prossima_scadenza',
-					'value' => date('Y-m-d'),
-					'compare' => '<='
-				]
+				[ 'key' => 'rinnovo_automatico', 'value' => '1' ],
+				[ 'key' => 'stato', 'value' => ['attivo', 'scaduto'], 'compare' => 'IN' ],
+				[ 'key' => 'data_prossima_scadenza', 'value' => date('Y-m-d'), 'compare' => '<=' ],
 			]
 		];
-		
+
 		$query = new WP_Query($args);
-		
+
 		if ($query->have_posts()) {
 			foreach ($query->posts as $post) {
 				$scadenza_attuale = get_field('data_prossima_scadenza', $post->ID);
 				$frequenza        = get_field('frequenza', $post->ID);
-			
+
 				if (!$scadenza_attuale || !$frequenza) {
 					continue;
 				}
-				
-				$old_scad = $scadenza_attuale;
-			
-				// 1) BLOCCO OLTRE SOGLIA: auto-cessa invece di rinnovare
+
+				$old_scad   = $scadenza_attuale;
 				$days_since = SPM_Date_Helper::days_since_due($scadenza_attuale);
+
+				// 1) BLOCCO OLTRE SOGLIA: auto-cessa invece di rinnovare
 				if ($days_since !== null && $days_since > self::get_auto_cessazione_giorni()) {
 					update_field('stato', 'cessato', $post->ID);
+					// AGGIUNTA
+					if (!get_field('data_cessazione', $post->ID)) {
+						update_field('data_cessazione', current_time('Y-m-d'), $post->ID);
+					}
+
 					self::log_operazione($post->ID, 'cessazione', 0, '', ['days_since' => $days_since]);
+					self::stats_touch_month((int)$post->ID);
 					self::touch_servizio_stats($post->ID);
 					continue;
 				}
-			
+
 				// 2) RINNOVO AUTOMATICO (policy semplice: +1 periodo)
 				$nuova_scadenza = SPM_Date_Helper::calculate_next_due_date($scadenza_attuale, $frequenza);
-			
+
 				update_field('data_prossima_scadenza', $nuova_scadenza, $post->ID);
 				update_field('stato', 'attivo', $post->ID);
 				self::touch_servizio_stats($post->ID);
-			
+
 				// importo robusto
 				$importo = get_field('prezzo_contratto', $post->ID);
 				if ($importo === '' || $importo === null) {
@@ -723,8 +714,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 					$val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
 					$importo = ($val !== '' && $val !== null) ? $val : 0;
 				}
-			
-				// importo robusto già calcolato in seguito nel tuo codice, riusa la variabile $importo
+
 				self::log_operazione(
 					$post->ID,
 					'rinnovo_automatico',
@@ -732,40 +722,39 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 					'',
 					['scadenza_precedente' => $old_scad, 'scadenza_nuova' => $nuova_scadenza, 'steps' => 1]
 				);
-			
+
+				self::stats_touch_month((int)$post->ID);
+
 				// log di sistema
 				error_log('SPM: Rinnovo automatico contratto #' . $post->ID . ' fino al ' . $nuova_scadenza);
 			}
 
 		}
 	}
-	
+
 	/**
-	 * Invia reminder scadenze
+	 * Invia reminder scadenze (disabilitato per ora)
 	 */
 	private static function invia_reminder() {
-		
-		return; // disabilitiamo temporaneamente invio reminder
+		return; // disabilitato temporaneamente
+
 		$args = [
-			'post_type' => 'contratti',
+			'post_type'      => 'contratti',
 			'posts_per_page' => -1,
-			'meta_query' => [
-				[
-					'key' => 'stato',
-					'value' => 'attivo'
-				]
+			'meta_query'     => [
+				[ 'key' => 'stato', 'value' => 'attivo' ]
 			]
 		];
-		
+
 		$query = new WP_Query($args);
-		
+
 		if ($query->have_posts()) {
 			foreach ($query->posts as $post) {
-				$scadenza = get_field('data_prossima_scadenza', $post->ID);
+				$scadenza         = get_field('data_prossima_scadenza', $post->ID);
 				$giorni_preavviso = get_field('giorni_preavviso', $post->ID) ?: 30;
-				
+
 				$giorni_mancanti = SPM_Date_Helper::days_until_due($scadenza);
-				
+
 				// Invia reminder se corrisponde ai giorni preavviso
 				if ($giorni_mancanti == $giorni_preavviso) {
 					$sent = self::send_reminder_email($post->ID);
@@ -776,20 +765,20 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			}
 		}
 	}
-	
+
 	/**
 	 * Invia email reminder
 	 */
 	private static function send_reminder_email($post_id) {
 		$cliente_id = get_field('cliente', $post_id);
-		$email = get_field('email', $cliente_id);
-		
+		$email      = get_field('email', $cliente_id);
+
 		if (!$email) return false;
-		
+
 		$servizio_id = get_field('servizio', $post_id);
-		$scadenza = get_field('data_prossima_scadenza', $post_id);
-		$giorni = SPM_Date_Helper::days_until_due($scadenza);
-		
+		$scadenza    = get_field('data_prossima_scadenza', $post_id);
+		$giorni      = SPM_Date_Helper::days_until_due($scadenza);
+
 		$subject = 'Promemoria scadenza servizio';
 		$message = sprintf(
 			"Gentile %s,\n\nIl servizio %s scadrà tra %d giorni (%s).\n\nCordiali saluti,\nStudio 121",
@@ -798,45 +787,45 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			$giorni,
 			SPM_Date_Helper::to_display_format($scadenza)
 		);
-		
+
 		return wp_mail($email, $subject, $message);
 	}
-	
+
 	/**
 	 * COLONNE ADMIN
 	 */
 	public static function add_admin_columns($columns) {
 		$new_columns = [
-			'cb' => $columns['cb'],
-			'title' => 'Contratto',
-			'cliente' => 'Cliente',
-			'servizio' => 'Servizio',
-			'scadenza' => 'Scadenza',
-			'frequenza'     => 'Frequenza',
-			'stato' => 'Stato',
-			// 'azioni' => 'Azioni Rapide'
+			'cb'        => $columns['cb'],
+			'title'     => 'Contratto',
+			'cliente'   => 'Cliente',
+			'servizio'  => 'Servizio',
+			'scadenza'  => 'Scadenza',
+			'frequenza' => 'Frequenza',
+			'stato'     => 'Stato',
+			// 'azioni'  => 'Azioni Rapide'
 		];
 		return $new_columns;
 	}
-	
+
 	public static function render_admin_columns($column, $post_id) {
 		switch ($column) {
 			case 'cliente':
 				$cliente_id = get_field('cliente', $post_id);
 				echo $cliente_id ? esc_html(get_the_title($cliente_id)) : '—';
 				break;
-				
+
 			case 'servizio':
 				$servizio_id = get_field('servizio', $post_id);
 				echo $servizio_id ? esc_html(get_the_title($servizio_id)) : '—';
 				break;
-				
+
 			case 'scadenza':
 				$scadenza = get_field('data_prossima_scadenza', $post_id);
 				if ($scadenza) {
-					$giorni = SPM_Date_Helper::days_until_due($scadenza);
+					$giorni  = SPM_Date_Helper::days_until_due($scadenza);
 					$display = SPM_Date_Helper::to_display_format($scadenza);
-					
+
 					if ($giorni < 0) {
 						echo '<span style="color:red">⚠️ ' . $display . '</span>';
 					} elseif ($giorni <= 30) {
@@ -848,22 +837,22 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 					echo '—';
 				}
 				break;
-				
+
 			case 'frequenza':
-			$freq = get_field('frequenza', $post_id);
-			$map  = [
-				'mensile'     => 'Mensile',
-				'trimestrale' => 'Trimestrale',
-				'quadrimestrale' => 'Quadrimestrale',
-				'semestrale'  => 'Semestrale',
-				'annuale'     => 'Annuale',
-			];
-			$label = $map[$freq] ?? ( $freq ? ucfirst((string)$freq) : '—' );
-			echo esc_html($label);
-			break;
-				
+				$freq = get_field('frequenza', $post_id);
+				$map  = [
+					'mensile'        => 'Mensile',
+					'trimestrale'    => 'Trimestrale',
+					'quadrimestrale' => 'Quadrimestrale',
+					'semestrale'     => 'Semestrale',
+					'annuale'        => 'Annuale',
+				];
+				$label = $map[$freq] ?? ( $freq ? ucfirst((string)$freq) : '—' );
+				echo esc_html($label);
+				break;
+
 			case 'stato':
-				$stato = get_field('stato', $post_id);
+				$stato  = get_field('stato', $post_id);
 				$colors = ['attivo'=>'green','sospeso'=>'orange','scaduto'=>'red','cessato'=>'gray'];
 				$emoji  = ['attivo'=>'🟢','sospeso'=>'🟡','scaduto'=>'🔴','cessato'=>'⚫'];
 				$color  = $colors[$stato] ?? 'gray';
@@ -871,74 +860,61 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				$label  = ($stato !== null && $stato !== '') ? ucfirst((string)$stato) : '—';
 				echo '<span style="color:' . esc_attr($color) . '">' . $icon . ' ' . esc_html($label) . '</span>';
 				break;
-				
+
 			case 'azioni':
-			$stato = get_field('stato', $post_id);
-			$scadenza = get_field('data_prossima_scadenza', $post_id);
-			
-			$oltre_soglia = false;
-			$days_since = null;
-			if ($scadenza) {
-				$days_since = SPM_Date_Helper::days_since_due($scadenza);
-				$oltre_soglia = ($days_since !== null && $days_since > SPM_Contract_Handler::AUTO_CESSAZIONE_GIORNI);
-			}
-			
-			if ($stato !== 'cessato') {
-				if ($oltre_soglia) {
-					echo '<span style="color:#dc3232;font-weight:bold;">Scaduto da ' . (int)$days_since . ' giorni → Cessazione automatica</span>';
-				} else {
-					echo '<button class="button button-small spm-action" data-action="rinnova" data-id="' . $post_id . '">Rinnova</button> ';
+				$stato    = get_field('stato', $post_id);
+				$scadenza = get_field('data_prossima_scadenza', $post_id);
+
+				$oltre_soglia = false;
+				$days_since   = null;
+				if ($scadenza) {
+					$days_since   = SPM_Date_Helper::days_since_due($scadenza);
+					$oltre_soglia = ($days_since !== null && $days_since > self::get_auto_cessazione_giorni()); // fix costante
 				}
-			}
-			
-			if ($stato === 'attivo') {
-				echo '<button class="button button-small spm-action" data-action="sospendi" data-id="' . $post_id . '">Sospendi</button>';
-			} elseif ($stato === 'sospeso') {
-				echo '<button class="button button-small spm-action" data-action="riattiva" data-id="' . $post_id . '">Riattiva</button>';
-			}
-			break;
 
+				if ($stato !== 'cessato') {
+					if ($oltre_soglia) {
+						echo '<span style="color:#dc3232;font-weight:bold;">Scaduto da ' . (int)$days_since . ' giorni → Cessazione automatica</span>';
+					} else {
+						echo '<button class="button button-small spm-action" data-action="rinnova" data-id="' . $post_id . '">Rinnova</button> ';
+					}
+				}
+
+				if ($stato === 'attivo') {
+					echo '<button class="button button-small spm-action" data-action="sospendi" data-id="' . $post_id . '">Sospendi</button>';
+				} elseif ($stato === 'sospeso') {
+					echo '<button class="button button-small spm-action" data-action="riattiva" data-id="' . $post_id . '">Riattiva</button>';
+				}
+				break;
 		}
-		
 	}
-	
 
-	
 	/**
 	 * METABOX AZIONI
 	 */
+	public static function add_action_metabox($post) {
+		add_meta_box(
+			'spm_contract_actions',
+			'⚡ Azioni Contratto',
+			[__CLASS__, 'render_action_metabox'],
+			'contratti',
+			'side',
+			'high'
+		);
+	}
 
-	 // Cambia la firma per ricevere $post
-	 public static function add_action_metabox($post) {
-		 //versione precedente, nasconva custom metabox se il contratto doveva ancora essere creato
-		 // $status = get_post_status($post);
-		 // if (!$post || !$post->ID || in_array($status, ['auto-draft','draft'])) {
-			//  return; // non aggiungere la metabox in creazione
-		 // }
-	 
-	 	add_meta_box(
-			 'spm_contract_actions',
-			 '⚡ Azioni Contratto',
-			 [__CLASS__, 'render_action_metabox'],
-			 'contratti',
-			 'side',
-			 'high'
-		 );
-	 }
-	 	 
-	
 	public static function render_action_metabox($post) {
 		$status = get_post_status($post);
-	
+
 		// Caso 1: contratto nuovo (draft / auto-draft)
-		if (in_array($status, ['auto-draft','draft'])) {
+		if (in_array($status, ['auto-draft','draft'], true)) {
 			?>
 			<div id="spm-actions-box">
 				<p>
 					<button type="button" class="button button-primary button-large"
-							  onclick="spmNativePrimaryClick()">
+						onclick="spmNativePrimaryClick()">
 						💾 Salva Contratto
-					 </button>
+					</button>
 				</p>
 				<div style="background:#f9f9f9;padding:10px;border-left:4px solid #777;">
 					Dopo il primo salvataggio saranno disponibili le azioni rapide.
@@ -947,33 +923,32 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			<?php
 			return;
 		}
-	
+
 		// Caso 2: contratto già salvato
-		$stato     = get_field('stato', $post->ID);
-		$scadenza  = get_field('data_prossima_scadenza', $post->ID);
+		$stato           = get_field('stato', $post->ID);
+		$scadenza        = get_field('data_prossima_scadenza', $post->ID);
 		$giorni_mancanti = $scadenza ? SPM_Date_Helper::days_until_due($scadenza) : null;
-		$days_since   = $scadenza ? SPM_Date_Helper::days_since_due($scadenza) : null;
-		$oltre_soglia = ($days_since !== null && $days_since > self::get_auto_cessazione_giorni());
+		$days_since      = $scadenza ? SPM_Date_Helper::days_since_due($scadenza) : null;
+		$oltre_soglia    = ($days_since !== null && $days_since > self::get_auto_cessazione_giorni());
 		?>
 		<div id="spm-actions-box">
 
-	
 			<!-- Info -->
-			<div style="background: #f9f9f9; padding: 10px; margin-bottom: 15px; border-left: 4px solid #0073aa;">
+			<div style="background:#f9f9f9;padding:10px;margin-bottom:15px;border-left:4px solid #0073aa;">
 				<strong>Stato:</strong> <?php echo esc_html($stato ?: '—'); ?><br>
 				<?php if ($scadenza): ?>
 					<strong>Scadenza:</strong> <?php echo SPM_Date_Helper::to_display_format($scadenza); ?><br>
 					<strong>Giorni mancanti:</strong> <?php echo $giorni_mancanti; ?>
 				<?php endif; ?>
 			</div>
+
 			<!-- Pulsante Salva -->
 			<p>
-				<button type="button" class="button button-primary button-large"
-						  onclick="spmNativePrimaryClick()">
+				<button type="button" class="button button-primary button-large" onclick="spmNativePrimaryClick()">
 					💾 Salva Contratto
-				  </button>
+				</button>
 			</p>
-	
+
 			<!-- Azioni -->
 			<?php if ($stato !== 'cessato'): ?>
 				<?php if ($stato === 'attivo'): ?>
@@ -990,18 +965,18 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 					<p><button class="button spm-action" data-action="sospendi" data-id="<?php echo $post->ID; ?>">
 						⏸️ Sospendi
 					</button></p>
-	
+
 				<?php elseif ($stato === 'scaduto' && !$oltre_soglia): ?>
 					<p><button class="button button-primary spm-action" data-action="rinnova" data-id="<?php echo $post->ID; ?>">
 						🔄 Rinnova Contratto
 					</button></p>
-	
+
 				<?php elseif ($stato === 'sospeso'): ?>
 					<p><button class="button button-primary spm-action" data-action="riattiva" data-id="<?php echo $post->ID; ?>">
 						▶️ Riattiva
 					</button></p>
 				<?php endif; ?>
-	
+
 				<hr>
 				<p><button class="button spm-action" data-action="cessa" data-id="<?php echo $post->ID; ?>"
 					onclick="return confirm('Cessare definitivamente il contratto?');">
@@ -1009,95 +984,72 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				</button></p>
 			<?php endif; ?>
 		</div>
-	
-	<script>
-	jQuery(document).ready(function($) {
-	  $('.spm-action').on('click', function(e) {
-		e.preventDefault();
-		var btn = $(this);
-		var action = btn.data('action');
-		var id = btn.data('id');
-	
-		console.log('[SPM] click action=%s postId=%s', action, id);
-	
-		// ⛔ Lascialo allo script esterno (che fa: Salva ACF → Rinnova)
-		if (action === 'rinnova') {
-		  console.log('[SPM] rinnova delegato a script esterno');
-		  return;
-		}
-	
-		if (action === 'cessa' && !confirm('Sei sicuro di voler cessare definitivamente il contratto?')) {
-		  console.log('[SPM] cessa annullato dall’utente');
-		  return;
-		}
-	
-		var oldLabel = btn.text();
-		btn.prop('disabled', true).text('Elaborazione…');
-		var t0 = performance.now();
-	
-		console.log('[SPM] ajax POST start', {action, id});
-	
-		$.post(ajaxurl, {
-		  action: 'spm_contract_action',
-		  contract_action: action,
-		  post_id: id,
-		  _wpnonce: '<?php echo wp_create_nonce('spm_contract_action'); ?>'
-		})
-		.done(function(response) {
-		  var ms = Math.round(performance.now() - t0);
-		  console.log('[SPM] ajax POST done', {action, id, ms, response});
-		  if (response.success) {
-			alert(response.data.message);
-			location.reload();
-		  } else {
-			var msg = (response.data && response.data.message) ? response.data.message : 'Operazione fallita';
-			console.error('[SPM] ajax POST error', {action, id, msg});
-			alert('Errore: ' + msg);
-			btn.prop('disabled', false).text(oldLabel);
-		  }
-		})
-		.fail(function(jqXHR, textStatus, errorThrown) {
-		  var ms = Math.round(performance.now() - t0);
-		  console.error('[SPM] ajax POST FAIL', {
-			action, id, ms,
-			textStatus, errorThrown,
-			responseText: jqXHR.responseText
-		  });
-		  alert('Errore di rete o permessi');
-		  btn.prop('disabled', false).text(oldLabel);
-		});
-	  });
-	});
-	</script>
 
+		<script>
+		jQuery(document).ready(function($) {
+			$('.spm-action').on('click', function(e) {
+				e.preventDefault();
+				var btn = $(this);
+				var action = btn.data('action');
+				var id = btn.data('id');
+
+				// rinnovo delegato allo script esterno (Salva ACF → Rinnova)
+				if (action === 'rinnova') return;
+
+				if (action === 'cessa' && !confirm('Sei sicuro di voler cessare definitivamente il contratto?')) {
+					return;
+				}
+
+				var oldLabel = btn.text();
+				btn.prop('disabled', true).text('Elaborazione…');
+
+				$.post(ajaxurl, {
+					action: 'spm_contract_action',
+					contract_action: action,
+					post_id: id,
+					_wpnonce: '<?php echo wp_create_nonce('spm_contract_action'); ?>'
+				})
+				.done(function(response) {
+					if (response.success) {
+						alert(response.data.message);
+						location.reload();
+					} else {
+						var msg = (response.data && response.data.message) ? response.data.message : 'Operazione fallita';
+						alert('Errore: ' + msg);
+						btn.prop('disabled', false).text(oldLabel);
+					}
+				})
+				.fail(function() {
+					alert('Errore di rete o permessi');
+					btn.prop('disabled', false).text(oldLabel);
+				});
+			});
+		});
+		</script>
 		<?php
 	}
 
-
-
-
-	
 	/**
 	 * HANDLE AJAX
 	 */
 	public static function handle_ajax_action() {
-		
+
 		check_ajax_referer('spm_contract_action', '_wpnonce');
-		
+
 		$post_id = intval($_POST['post_id']);
 		$action  = sanitize_text_field($_POST['contract_action']);
-		
+
 		if (!current_user_can('edit_post', $post_id)) {
 			wp_send_json_error(['message' => 'Non autorizzato']);
 		}
-		
+
 		$status = get_post_status($post_id);
-		if (in_array($status, ['auto-draft','draft'])) {
+		if (in_array($status, ['auto-draft','draft'], true)) {
 			wp_send_json_error(['message' => 'Contratto non ancora inizializzato. Salva prima.']);
 		}
-		
+
 		$result = false;
-		
+
 		switch ($action) {
 			case 'rinnova':
 				$result = self::rinnova_contratto($post_id);
@@ -1112,14 +1064,14 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				$result = self::cessa_contratto($post_id);
 				break;
 		}
-		
+
 		if ($result && $result['success']) {
 			wp_send_json_success($result);
 		} else {
 			wp_send_json_error($result ?: ['message' => 'Azione non valida']);
 		}
 	}
-	
+
 	/**
 	 * Helper: è un contratto cessato?
 	 */
@@ -1128,25 +1080,21 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		$stato = get_field('stato', $post_id);
 		return ($stato === 'cessato');
 	}
-	
+
 	/**
-	 * UI editor: nasconde il pulsante "Aggiorna" e blocca il salvataggio (senza toccare le capability).
-	 * Funziona su Classic Editor e Gutenberg. L'utente può entrare e modificare i campi,
-	 * ma non può eseguire il salvataggio.
+	 * UI editor: nasconde il pulsante "Aggiorna" e blocca il salvataggio se cessato.
 	 */
 	public static function admin_head_hide_update_for_cessati() {
 		global $post, $pagenow;
 		if ($pagenow !== 'post.php' || !$post || $post->post_type !== 'contratti') return;
 		if (!self::is_contratto_cessato($post->ID)) return;
-	
+
 		// Classic editor: nascondi il pulsante "Aggiorna"
 		echo '<style>
-			/* bottone "Aggiorna" nel submit box */
 			#publishing-action .button.button-primary.button-large { display:none !important; }
-			/* sistema layout del box azioni */
 			#submitpost #major-publishing-actions { display:flex; justify-content:space-between; align-items:center; }
 		</style>';
-	
+
 		// Gutenberg: blocca il salvataggio + nascondi il primario in header
 		?>
 		<script>
@@ -1160,7 +1108,6 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				var btn = document.querySelector('.edit-post-header__settings .components-button.is-primary');
 				if (btn) btn.style.display = 'none';
 			}
-			// ripeti per gestire mount asincrono dell'editor
 			var i = setInterval(function(){ lockSaving(); hidePrimaryButton(); }, 300);
 			setTimeout(function(){ clearInterval(i); }, 3000);
 			if (window.wp && wp.domReady) wp.domReady(function(){ lockSaving(); hidePrimaryButton(); });
@@ -1168,22 +1115,20 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		</script>
 		<?php
 	}
-	
+
 	/**
 	 * Evita salvataggi impliciti (autosave, heartbeat) quando cessato.
-	 * Non tocca le capability: l'utente entra e vede tutto, ma non partono update in background.
 	 */
 	public static function disable_autosave_for_cessati($hook) {
 		global $post;
 		if ($hook !== 'post.php' || !$post || $post->post_type !== 'contratti') return;
 		if (!self::is_contratto_cessato($post->ID)) return;
-	
-		// Disattiva autosave e heartbeat (sia Classic che Gutenberg si appoggiano a questi)
+
 		wp_deregister_script('autosave');
 		wp_dequeue_script('autosave');
 		wp_dequeue_script('heartbeat');
 	}
-	
+
 	/**
 	 * Rende ordinabili alcune colonne della lista contratti.
 	 */
@@ -1194,75 +1139,71 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		$columns['stato']     = 'stato';
 		return $columns;
 	}
-	
+
 	/**
 	 * Gestisce l'ordinamento quando si cliccano le intestazioni.
 	 */
 	public static function handle_sortable_and_filters($query) {
 		if (!is_admin() || !$query->is_main_query()) return;
 		if ($query->get('post_type') !== 'contratti') return;
-	
+
 		$orderby = $query->get('orderby');
-	
+
 		// SCADENZA (campo meta YYYY-MM-DD)
 		if ($orderby === 'data_prossima_scadenza' || $orderby === 'scadenza') {
 			$query->set('meta_key', 'data_prossima_scadenza');
-			$query->set('orderby', 'meta_value'); // Y-m-d ordina correttamente come stringa
+			$query->set('orderby', 'meta_value');
 		}
-	
+
 		// FREQUENZA (meta testuale)
 		if ($orderby === 'frequenza') {
 			$query->set('meta_key', 'frequenza');
 			$query->set('orderby', 'meta_value');
 		}
-	
+
 		// STATO (meta testuale)
 		if ($orderby === 'stato') {
 			$query->set('meta_key', 'stato');
 			$query->set('orderby', 'meta_value');
 		}
-	
+
 		// SERVIZIO (ACF post object: salviamo l'ID nel meta 'servizio')
 		if ($orderby === 'servizio') {
 			$query->set('meta_key', 'servizio');
 			$query->set('orderby', 'meta_value_num');
 		}
 	}
-/**
+
+	/**
 	 * Aggiunge i filtri sopra la tabella della lista contratti.
 	 */
 	public static function add_admin_filters($post_type) {
 		if ($post_type !== 'contratti') return;
-	
-		// ——— Servizio (dropdown dai post "servizi") ———
-		// Adatta $servizio_post_type se diverso (es: 'servizi')
+
 		$servizio_post_type = 'servizi';
 		$sel_servizio = isset($_GET['filter_servizio']) ? intval($_GET['filter_servizio']) : 0;
-	
+
 		wp_dropdown_pages([
-			'post_type'        => $servizio_post_type,
-			'name'             => 'filter_servizio',
-			'show_option_all'  => 'Tutti i servizi',
-			'option_none_value'=> '',
-			'selected'         => $sel_servizio,
-			// usa posts_per_page -1 per elencare tutto (valuta performance)
-			'number'           => 0,
+			'post_type'         => $servizio_post_type,
+			'name'              => 'filter_servizio',
+			'show_option_all'   => 'Tutti i servizi',
+			'option_none_value' => '',
+			'selected'          => $sel_servizio,
+			'number'            => 0,
 		]);
-	
-		// ——— Scadenza (intervallo) ———
+
 		$scad_from = isset($_GET['filter_scadenza_from']) ? esc_attr($_GET['filter_scadenza_from']) : '';
 		$scad_to   = isset($_GET['filter_scadenza_to'])   ? esc_attr($_GET['filter_scadenza_to'])   : '';
 		echo '<input type="date" name="filter_scadenza_from" value="' . $scad_from . '" placeholder="Scadenza da" style="margin-left:8px" />';
 		echo '<input type="date" name="filter_scadenza_to"   value="' . $scad_to   . '" placeholder="Scadenza a"  style="margin-left:4px" />';
-	
-		// ——— Frequenza ———
+
 		$freq_options = [
-			''             => 'Tutte le frequenze',
-			'mensile'      => 'Mensile',
-			'trimestrale'  => 'Trimestrale',
-			'quadrimestrale'  => 'Quadrimestrale',
-			'semestrale'   => 'Semestrale',
-			'annuale'      => 'Annuale',
+			''               => 'Tutte le frequenze',
+			'mensile'        => 'Mensile',
+			'trimestrale'    => 'Trimestrale',
+			'quadrimestrale' => 'Quadrimestrale',
+			'semestrale'     => 'Semestrale',
+			'annuale'        => 'Annuale',
 		];
 		$sel_freq = isset($_GET['filter_frequenza']) ? sanitize_text_field($_GET['filter_frequenza']) : '';
 		echo '<select name="filter_frequenza" style="margin-left:8px">';
@@ -1274,8 +1215,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			);
 		}
 		echo '</select>';
-	
-		// ——— Stato ———
+
 		$stato_options = [
 			''         => 'Tutti gli stati',
 			'attivo'   => 'Attivo',
@@ -1294,61 +1234,47 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		}
 		echo '</select>';
 	}
-	
-	
-	
+
 	/**
 	 * Applica i filtri alla query principale della lista contratti.
 	 */
 	public static function apply_admin_filters($query) {
 		if (!is_admin() || !$query->is_main_query()) return;
 		if ($query->get('post_type') !== 'contratti') return;
-	
+
 		$meta_query = [];
 		$meta_query['relation'] = 'AND';
-	
-		// ——— Servizio (ACF post object: meta 'servizio' = ID) ———
+
+		// Servizio
 		if (!empty($_GET['filter_servizio'])) {
 			$servizio_id = intval($_GET['filter_servizio']);
 			if ($servizio_id > 0) {
-				$meta_query[] = [
-					'key'     => 'servizio',
-					'value'   => $servizio_id,
-					'compare' => '=',
-				];
+				$meta_query[] = [ 'key' => 'servizio', 'value' => $servizio_id, 'compare' => '=' ];
 			}
 		}
-	
-		// ——— Frequenza (meta testuale) ———
+
+		// Frequenza
 		if (!empty($_GET['filter_frequenza'])) {
 			$freq = sanitize_text_field($_GET['filter_frequenza']);
-			$meta_query[] = [
-				'key'     => 'frequenza',
-				'value'   => $freq,
-				'compare' => '=',
-			];
+			$meta_query[] = [ 'key' => 'frequenza', 'value' => $freq, 'compare' => '=' ];
 		}
-	
-		// ——— Stato (meta testuale) ———
+
+		// Stato
 		if (!empty($_GET['filter_stato'])) {
 			$stato = sanitize_text_field($_GET['filter_stato']);
-			$meta_query[] = [
-				'key'     => 'stato',
-				'value'   => $stato,
-				'compare' => '=',
-			];
+			$meta_query[] = [ 'key' => 'stato', 'value' => $stato, 'compare' => '=' ];
 		}
-	
-		// ——— Scadenza (intervallo date YYYY-MM-DD) ———
+
+		// Scadenza (intervallo date YYYY-MM-DD)
 		$from = !empty($_GET['filter_scadenza_from']) ? sanitize_text_field($_GET['filter_scadenza_from']) : '';
 		$to   = !empty($_GET['filter_scadenza_to'])   ? sanitize_text_field($_GET['filter_scadenza_to'])   : '';
-	
+
 		if ($from && $to) {
 			$meta_query[] = [
 				'key'     => 'data_prossima_scadenza',
 				'value'   => [$from, $to],
 				'compare' => 'BETWEEN',
-				'type'    => 'CHAR', // 'Y-m-d' confrontabile come stringa
+				'type'    => 'CHAR',
 			];
 		} elseif ($from) {
 			$meta_query[] = [
@@ -1365,40 +1291,39 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 				'type'    => 'CHAR',
 			];
 		}
-	
-		// Applica meta_query se abbiamo almeno un filtro reale
+
 		if (count($meta_query) > 1) {
 			$query->set('meta_query', $meta_query);
 		}
 	}
 
 	/* ================== LOCK UI (ACF) ================== */
-	
+
 	public static function acf_lock_cliente($field){
 		if (!is_admin()) return $field;
 		global $post;
 		if (!$post || $post->post_type !== 'contratti') return $field;
-	
+
 		$val = get_field('cliente', $post->ID);
 		$is_initialized = $post->post_status !== 'auto-draft' && !empty($val);
-	
+
 		if ($is_initialized) {
-			$field['readonly'] = 1;       // mantieni il valore nel POST
+			$field['readonly'] = 1; // mantieni il valore nel POST
 			$field['disabled'] = 0;
 			$field['wrapper']['class'] = ($field['wrapper']['class'] ?? '').' spm-locked';
 			$field['instructions'] = trim(($field['instructions'] ?? '').' (bloccato dopo la creazione)');
 		}
 		return $field;
 	}
-	
+
 	public static function acf_lock_servizio($field){
 		if (!is_admin()) return $field;
 		global $post;
 		if (!$post || $post->post_type !== 'contratti') return $field;
-	
+
 		$val = get_field('servizio', $post->ID);
 		$is_initialized = $post->post_status !== 'auto-draft' && !empty($val);
-	
+
 		if ($is_initialized) {
 			$field['readonly'] = 1;
 			$field['disabled'] = 0;
@@ -1407,12 +1332,12 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		}
 		return $field;
 	}
-	
+
 	public static function acf_lock_stato_if_cessato($field){
 		if (!is_admin()) return $field;
 		global $post;
 		if (!$post || $post->post_type !== 'contratti') return $field;
-	
+
 		$stato = get_field('stato', $post->ID);
 		if ($stato === 'cessato') {
 			$field['readonly'] = 1;  // non disabled, così il valore resta nel POST
@@ -1422,9 +1347,8 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		}
 		return $field;
 	}
-	
+
 	public static function admin_css_locked_fields(){
-		// Piccolo stile visivo per i campi bloccati
 		echo '<style>
 			.acf-field.spm-locked .acf-input select,
 			.acf-field.spm-locked .acf-input input[type="text"],
@@ -1433,39 +1357,9 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			}
 		</style>';
 	}
-	
-	public static function acf_lock_data_attivazione($field){
-		if (!is_admin()) return $field;
-		global $post;
-		if (!$post || $post->post_type !== 'contratti') return $field;
-	
-		$val = get_field('data_attivazione', $post->ID, false);
-		$is_initialized = $post->post_status !== 'auto-draft' && $post->post_status !== 'draft' && !empty($val);
-	
-		if ($is_initialized) {
-			$field['readonly'] = 1;     // NON usare disabled: così resta nel POST
-			$field['disabled'] = 0;
-			$field['wrapper']['class'] = ($field['wrapper']['class'] ?? '').' spm-locked';
-			$field['instructions'] = trim(($field['instructions'] ?? '').' (bloccato dopo la creazione)');
-		}
-		return $field;
-	}
-	
-	public static function acf_enforce_data_attivazione($value, $post_id, $field){
-		$prev = get_field('data_attivazione', $post_id, false);
-		// Se esiste già un valore e il post non è in creazione, non permettere cambi
-		$status = get_post_status($post_id);
-		$is_initialized = $status !== 'auto-draft' && $status !== 'draft' && !empty($prev);
-	
-		if ($is_initialized) {
-			return $prev; // Mantieni il valore salvato
-		}
-		return $value;
-	}
 
-	
 	/* ============ ENFORCEMENT SERVER-SIDE (ACF) ============ */
-	
+
 	public static function acf_enforce_cliente($value, $post_id, $field){
 		$prev = get_field('cliente', $post_id, false);
 		if (!empty($prev)) {
@@ -1473,7 +1367,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		}
 		return $value;
 	}
-	
+
 	public static function acf_enforce_servizio($value, $post_id, $field){
 		$prev = get_field('servizio', $post_id, false);
 		if (!empty($prev)) {
@@ -1481,7 +1375,7 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		}
 		return $value;
 	}
-	
+
 	public static function acf_enforce_stato($value, $post_id, $field){
 		$prev = get_field('stato', $post_id, false);
 		if ($prev === 'cessato') {
@@ -1489,78 +1383,70 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		}
 		return $value;
 	}
-	
-	
+
 	/* ============== Hardening lista (Quick Edit) ============== */
-	
+
 	public static function remove_quick_edit($actions, $post){
 		if ($post->post_type === 'contratti') {
 			unset($actions['inline hide-if-no-js']); // "Modifica rapida"
 		}
 		return $actions;
 	}
-	
+
 	/**
-	 * Mantiene sincronizzate le statistiche del "servizio" quando
-	 * un CONTRATTO cambia “stato di esistenza” a livello di post:
-	 * - spostato nel cestino (wp_trash_post)
-	 * - ripristinato dal cestino (untrash_post)
-	 * - eliminato definitivamente (before_delete_post)
-	 *
-	 * In tutti i casi ricalcola le stats del servizio collegato.
+	 * Mantiene sincronizzate le statistiche quando il post cambia “stato di esistenza”.
 	 */
 	public static function on_trash_untrash_delete($post_id){
-		// Esegui solo per il CPT "contratti"
 		if (get_post_type($post_id) !== 'contratti') {
 			return;
 		}
+		self::stats_touch_month((int)$post_id);
 		self::touch_servizio_stats($post_id);
 	}
-	
-	
+
 	/**
 	 * PRE: intercetta i valori ACF in arrivo e confronta con quelli in DB.
 	 * Va eseguito PRIMA che ACF scriva i meta (priority 1).
 	 */
 	public static function pre_acf_capture_diffs($post_id) {
 		if (get_post_type($post_id) !== 'contratti') return;
-	
+
 		$acf = $_POST['acf'] ?? null;
 		if (!$acf || !is_array($acf)) return;
-	
+
 		// Mappa ACF field_key => meta_key
 		$map = [
-			'field_spm_contratto_prezzo'              => 'prezzo_contratto',
-			'field_spm_contratto_frequenza'           => 'frequenza',
-			'field_spm_contratto_cadenza_fatturazione'=> 'cadenza_fatturazione',
+			'field_spm_contratto_prezzo'               => 'prezzo_contratto',
+			'field_spm_contratto_frequenza'            => 'frequenza',
+			'field_spm_contratto_cadenza_fatturazione' => 'cadenza_fatturazione',
 			'field_spm_contratto_rinnovo_auto'         => 'rinnovo_automatico',
 			'field_spm_contratto_giorni_preavviso'     => 'giorni_preavviso',
 			'field_spm_contratto_note'                 => 'note_interne',
 		];
-	
+
 		$changes = [];
-	
+
 		foreach ($map as $acf_key => $meta_key) {
 			if (!array_key_exists($acf_key, $acf)) continue;
-	
+
 			$new = $acf[$acf_key];
 			$old = get_field($meta_key, $post_id);
-	
+
 			// Normalizzazioni minime
 			if (is_string($old)) $old = trim($old);
 			if (is_string($new)) $new = trim($new);
-	
-			// ACF true_false e select possono arrivare come stringhe
+
+			// true_false e select possono arrivare come stringhe
 			if ($old !== $new) {
 				$changes[$meta_key] = ['from' => $old, 'to' => $new];
 			}
 		}
-	
+
 		if ($changes) {
 			self::$pending_diffs[$post_id] = ['changes' => $changes];
 		}
 	}
-	
+
 	/**
 	 * Ricalcola la scadenza solo quando serve:
 	 * - post nuovo (auto-draft/draft) O
@@ -1569,17 +1455,16 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 	private static function maybe_calculate_scadenza($post_id) {
 		$status   = get_post_status($post_id);
 		$has_date = (bool) get_field('data_prossima_scadenza', $post_id);
-	
+
 		if (in_array($status, ['auto-draft','draft'], true) || !$has_date) {
 			self::force_calculate_scadenza($post_id);
 		}
 		// altrimenti, non toccare la scadenza durante i salvataggi successivi
 	}
-	
-	
+
 	public static function ajax_acf_save() {
 		check_ajax_referer('spm_acf_save', '_wpnonce');
-	
+
 		$post_id = intval($_POST['post_id'] ?? 0);
 		if (!$post_id || get_post_type($post_id) !== 'contratti') {
 			wp_send_json_error(['message' => 'Post non valido']);
@@ -1587,29 +1472,23 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		if (!current_user_can('edit_post', $post_id)) {
 			wp_send_json_error(['message' => 'Non autorizzato']);
 		}
-	
+
 		// campi ACF serializzati come array field_key => value
 		$fields = isset($_POST['fields']) && is_array($_POST['fields']) ? $_POST['fields'] : [];
-	
-		// Valida minimo indispensabile
+
 		if (empty($fields)) {
 			wp_send_json_error(['message' => 'Nessun dato da salvare']);
 		}
-	
+
 		// Scrive i meta ACF (usa field_keys!).
 		if (function_exists('acf_update_values')) {
 			acf_update_values($fields, $post_id);
 		} else {
-			// fallback (ACF <5.7) se mai servisse:
 			foreach ($fields as $field_key => $value) {
 				acf_update_value($value, $post_id, $field_key);
 			}
 		}
-	
+
 		wp_send_json_success(['message' => 'Dati ACF salvati']);
 	}
-
-
-
 }
-
