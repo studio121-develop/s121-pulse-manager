@@ -250,8 +250,12 @@ add_action('admin_head', function(){
 	?>
 	<style>
 		.spm-led {
-			display:inline-block; width:10px; height:10px; border-radius:50%;
-			margin-left:2px; vertical-align:middle;
+			display:inline-block; 
+			width:10px; 
+			height:10px; 
+			border-radius:50%;
+			margin-left:2px; 
+			vertical-align:middle;
 		}
 		.spm-led-green {
 			background:#00c853;
@@ -263,7 +267,10 @@ add_action('admin_head', function(){
 			70%  { box-shadow: 0 0 0 8px rgba(0,200,83,0); }
 			100% { box-shadow: 0 0 0 0 rgba(0,200,83,0); }
 		}
-		.column-spm_usato { width: 80px; text-align:center; }
+		/* colonne tabella admin */
+		.column-spm_attivi { width: 80px; text-align:center; }
+		.column-spm_next   { width: 160px; }
+		.column-spm_usato  { width: 80px; text-align:center; }
 	</style>
 	<?php
 });
