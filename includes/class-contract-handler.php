@@ -460,6 +460,9 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 					'prezzo_contratto'     => 'Importo',
 					'frequenza'            => 'Frequenza',
 					'cadenza_fatturazione' => 'Cadenza fatturazione',
+					'rinnovo_automatico'   => 'Rinnovo automatico',
+					'giorni_preavviso'     => 'Preavviso',
+					'note_interne'         => 'Note interne',
 				];
 				$parts = [];
 				foreach (($ctx['changes'] ?? []) as $k => $delta) {
@@ -1496,6 +1499,9 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 			'field_spm_contratto_prezzo'              => 'prezzo_contratto',
 			'field_spm_contratto_frequenza'           => 'frequenza',
 			'field_spm_contratto_cadenza_fatturazione'=> 'cadenza_fatturazione',
+			'field_spm_contratto_rinnovo_auto'         => 'rinnovo_automatico',
+			'field_spm_contratto_giorni_preavviso'     => 'giorni_preavviso',
+			'field_spm_contratto_note'                 => 'note_interne',
 		];
 	
 		$changes = [];
