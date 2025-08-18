@@ -94,12 +94,17 @@ class SPM_Contract_Handler {
 		add_filter('acf/prepare_field/name=cliente',  [__CLASS__, 'acf_lock_cliente']);
 		add_filter('acf/prepare_field/name=servizio', [__CLASS__, 'acf_lock_servizio']);
 		add_filter('acf/prepare_field/name=stato',    [__CLASS__, 'acf_lock_stato_if_cessato']);
+		add_filter('acf/prepare_field/name=data_attivazione', [__CLASS__, 'acf_lock_data_attivazione']);
+
+		
 		add_action('admin_head',                      [__CLASS__, 'admin_css_locked_fields']);
 		
 		// --- ENFORCEMENT SERVER-SIDE (ignora modifiche non permesse)
 		add_filter('acf/update_value/name=cliente',   [__CLASS__, 'acf_enforce_cliente'], 10, 3);
 		add_filter('acf/update_value/name=servizio',  [__CLASS__, 'acf_enforce_servizio'], 10, 3);
 		add_filter('acf/update_value/name=stato',     [__CLASS__, 'acf_enforce_stato'],    10, 3);
+		add_filter('acf/update_value/name=data_attivazione',  [__CLASS__, 'acf_enforce_data_attivazione'], 10, 3);
+
 		
 		// --- Rimuovi "Modifica rapida" dalla lista (può bypassare ACF)
 		add_filter('post_row_actions',                [__CLASS__, 'remove_quick_edit'], 10, 2);
@@ -1429,6 +1434,35 @@ private static function log_operazione($post_id, $tipo_operazione, $importo = nu
 		</style>';
 	}
 	
+	public static function acf_lock_data_attivazione($field){
+		if (!is_admin()) return $field;
+		global $post;
+		if (!$post || $post->post_type !== 'contratti') return $field;
+	
+		$val = get_field('data_attivazione', $post->ID, false);
+		$is_initialized = $post->post_status !== 'auto-draft' && $post->post_status !== 'draft' && !empty($val);
+	
+		if ($is_initialized) {
+			$field['readonly'] = 1;     // NON usare disabled: così resta nel POST
+			$field['disabled'] = 0;
+			$field['wrapper']['class'] = ($field['wrapper']['class'] ?? '').' spm-locked';
+			$field['instructions'] = trim(($field['instructions'] ?? '').' (bloccato dopo la creazione)');
+		}
+		return $field;
+	}
+	
+	public static function acf_enforce_data_attivazione($value, $post_id, $field){
+		$prev = get_field('data_attivazione', $post_id, false);
+		// Se esiste già un valore e il post non è in creazione, non permettere cambi
+		$status = get_post_status($post_id);
+		$is_initialized = $status !== 'auto-draft' && $status !== 'draft' && !empty($prev);
+	
+		if ($is_initialized) {
+			return $prev; // Mantieni il valore salvato
+		}
+		return $value;
+	}
+
 	
 	/* ============ ENFORCEMENT SERVER-SIDE (ACF) ============ */
 	
