@@ -130,21 +130,19 @@ class SPM_Settings_Page {
 	 * Page render (UI a carte + manutenzione)
 	 * ========================= */
 
-	/** Render della pagina impostazioni */
 	public static function render() {
 		if (!current_user_can('manage_options')) wp_die('Non autorizzato');
-
+	
 		$tolleranza = (int) self::get('tolleranza_scaduto_giorni');
 		$auto       = (int) self::get('auto_cessazione_giorni');
-
-		// Notifiche dopo azioni admin_post
+	
 		$notice = isset($_GET['spm_notice']) ? sanitize_text_field($_GET['spm_notice']) : '';
 		?>
 		<div class="wrap">
 			<h1>⚙️ Impostazioni – S121 Pulse Manager</h1>
-
+	
 			<?php settings_errors(self::OPTION_NAME); ?>
-
+	
 			<?php if ($notice): ?>
 				<div class="notice notice-success is-dismissible">
 					<p>
@@ -159,26 +157,25 @@ class SPM_Settings_Page {
 					</p>
 				</div>
 			<?php endif; ?>
-
-			<!-- Intro -->
+	
 			<div style="margin:12px 0 20px 0; color:#555;">
 				Definisci la <strong>policy di scadenza e rinnovo</strong>. Le regole impattano rinnovi automatici, azioni manuali e KPI.
 			</div>
-
-			<!-- RIGA 1: RIASSUNTO POLICY (carte) -->
+	
+			<!-- RIGA 1: RIASSUNTO POLICY -->
 			<div style="display:flex; flex-wrap:wrap; gap:20px; margin:20px 0;">
 				<div style="flex:1 1 280px; background:white; padding:20px; border-left:4px solid #dba617; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
 					<h3 style="margin-top:0; color:#dba617;">⏰ Tolleranza “Scaduto poco”</h3>
 					<p style="font-size:28px; margin:0; font-weight:bold;"><?php echo esc_html($tolleranza); ?> giorni</p>
 					<p style="color:#666; margin:6px 0 0 0;">Entro questa finestra il rinnovo allinea la scadenza senza cessare il contratto.</p>
 				</div>
-
+	
 				<div style="flex:1 1 280px; background:white; padding:20px; border-left:4px solid #dc3232; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
 					<h3 style="margin-top:0; color:#dc3232;">⛔ Auto-cessazione</h3>
 					<p style="font-size:28px; margin:0; font-weight:bold;"><?php echo esc_html($auto); ?> giorni</p>
 					<p style="color:#666; margin:6px 0 0 0;">Oltre questa soglia lo stato diventa <strong>cessato</strong> e il rinnovo è bloccato.</p>
 				</div>
-
+	
 				<div style="flex:1 1 280px; background:white; padding:20px; border-left:4px solid #2271b1; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
 					<h3 style="margin-top:0; color:#2271b1;">📐 Regola effettiva</h3>
 					<p style="margin:0; line-height:1.6; color:#333;">
@@ -187,71 +184,65 @@ class SPM_Settings_Page {
 					</p>
 				</div>
 			</div>
-
-			<!-- RIGA 2: FORM IMPOSTAZIONI (Settings API) -->
-			<form method="post" action="options.php" style="margin-top:10px;">
-				<?php settings_fields(self::OPTION_GROUP); ?>
-
-				<div style="display:flex; flex-wrap:wrap; gap:20px;">
-					<!-- CARD: Policy Contratti -->
-					<div style="flex:1 1 520px; background:white; padding:20px; border-left:4px solid #2c3338; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-						<h2 style="margin:0 0 12px 0;">🔧 Policy contratti</h2>
-
-						<div style="display:flex; align-items:center; gap:12px; margin:12px 0;">
-							<label for="spm_tol" style="width:260px; font-weight:600;">Tolleranza “scaduto poco”</label>
-							<input id="spm_tol" type="number" min="0" name="<?php echo esc_attr(self::OPTION_NAME); ?>[tolleranza_scaduto_giorni]"
-								   value="<?php echo esc_attr($tolleranza); ?>" class="small-text" />
-							<span style="color:#666;">giorni</span>
-						</div>
-						<p style="margin:0 0 16px 0; color:#666;">Entro questa soglia consentiamo il rinnovo con allineamento (roll-forward fino a superare oggi).</p>
-
-						<div style="display:flex; align-items:center; gap:12px; margin:12px 0;">
-							<label for="spm_auto" style="width:260px; font-weight:600;">Soglia auto-cessazione</label>
-							<input id="spm_auto" type="number" min="1" name="<?php echo esc_attr(self::OPTION_NAME); ?>[auto_cessazione_giorni]"
-								   value="<?php echo esc_attr($auto); ?>" class="small-text" />
-							<span style="color:#666;">giorni</span>
-						</div>
-						<p style="margin:0; color:#666;">Superata questa soglia, lo stato passa a <strong>cessato</strong> e il rinnovo è bloccato.</p>
-
-						<div style="margin-top:18px;">
-							<?php submit_button('💾 Salva impostazioni'); ?>
-						</div>
+	
+			<div style="display:flex; flex-wrap:wrap; gap:20px;">
+				<!-- ===== FORM OPZIONI (SOLO questa card) ===== -->
+				<form method="post" action="options.php" style="flex:1 1 520px; background:white; padding:20px; border-left:4px solid #2c3338; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+					<?php settings_fields(self::OPTION_GROUP); ?>
+					<h2 style="margin:0 0 12px 0;">🔧 Policy contratti</h2>
+	
+					<div style="display:flex; align-items:center; gap:12px; margin:12px 0;">
+						<label for="spm_tol" style="width:260px; font-weight:600;">Tolleranza “scaduto poco”</label>
+						<input id="spm_tol" type="number" min="0" name="<?php echo esc_attr(self::OPTION_NAME); ?>[tolleranza_scaduto_giorni]"
+							   value="<?php echo esc_attr($tolleranza); ?>" class="small-text" />
+						<span style="color:#666;">giorni</span>
 					</div>
-
-					<!-- CARD: Manutenzione Statistiche -->
-					<div style="flex:1 1 380px; background:white; padding:20px; border-left:4px solid #72aee6; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-						<h2 style="margin:0 0 12px 0;">🛠️ Manutenzione statistiche</h2>
-						<p style="margin:0 0 10px 0; color:#555;">Operazioni idempotenti per ripristinare la coerenza di history & KPI.</p>
-
-						<!-- Rebuild KPI -->
-						<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;">
-							<input type="hidden" name="action" value="spm_stats_rebuild_kpis" />
-							<?php wp_nonce_field('spm_stats_rebuild_kpis'); ?>
-							<button type="submit" class="button">🔁 Ricostruisci KPI</button>
-							<span style="color:#666; margin-left:8px;">Ricalcola i KPI per tutto lo storico disponibile.</span>
-						</form>
-
-						<!-- Purge orfani + KPI -->
-						<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;">
-							<input type="hidden" name="action" value="spm_stats_purge_orphans" />
-							<?php wp_nonce_field('spm_stats_purge_orphans'); ?>
-							<button type="submit" class="button">🧽 Pulisci orfani + KPI</button>
-							<span style="color:#666; margin-left:8px;">Cancella history di contratti rimossi e ricostruisci KPI.</span>
-						</form>
-
-						<!-- Hard reindex -->
-						<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;" onsubmit="return confirm('ATTENZIONE: questa operazione svuota le tabelle history e KPI e rimaterializza tutto da zero. Procedere?');">
-							<input type="hidden" name="action" value="spm_stats_hard_reindex" />
-							<?php wp_nonce_field('spm_stats_hard_reindex'); ?>
-							<button type="submit" class="button button-primary">⚠️ Hard Reindex (TRUNCATE + Rebuild)</button>
-							<span style="color:#666; display:block; margin-top:6px;">Usa solo in caso di import massivi o incoerenze gravi.</span>
-						</form>
+					<p style="margin:0 0 16px 0; color:#666;">Entro questa soglia consentiamo il rinnovo con allineamento (roll-forward fino a superare oggi).</p>
+	
+					<div style="display:flex; align-items:center; gap:12px; margin:12px 0;">
+						<label for="spm_auto" style="width:260px; font-weight:600;">Soglia auto-cessazione</label>
+						<input id="spm_auto" type="number" min="1" name="<?php echo esc_attr(self::OPTION_NAME); ?>[auto_cessazione_giorni]"
+							   value="<?php echo esc_attr($auto); ?>" class="small-text" />
+						<span style="color:#666;">giorni</span>
 					</div>
+					<p style="margin:0; color:#666;">Superata questa soglia, lo stato passa a <strong>cessato</strong> e il rinnovo è bloccato.</p>
+	
+					<div style="margin-top:18px;">
+						<?php submit_button('💾 Salva impostazioni'); ?>
+					</div>
+				</form>
+	
+				<!-- ===== CARD MANUTENZIONE (FUORI dal form options.php) ===== -->
+				<div style="flex:1 1 380px; background:white; padding:20px; border-left:4px solid #72aee6; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+					<h2 style="margin:0 0 12px 0;">🛠️ Manutenzione statistiche</h2>
+					<p style="margin:0 0 10px 0; color:#555;">Operazioni idempotenti per ripristinare la coerenza di history & KPI.</p>
+	
+					<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;">
+						<input type="hidden" name="action" value="spm_stats_rebuild_kpis" />
+						<?php wp_nonce_field('spm_stats_rebuild_kpis'); ?>
+						<button type="submit" class="button">🔁 Ricostruisci KPI</button>
+						<span style="color:#666; margin-left:8px;">Ricalcola i KPI per tutto lo storico disponibile.</span>
+					</form>
+	
+					<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;">
+						<input type="hidden" name="action" value="spm_stats_purge_orphans" />
+						<?php wp_nonce_field('spm_stats_purge_orphans'); ?>
+						<button type="submit" class="button">🧽 Pulisci orfani + KPI</button>
+						<span style="color:#666; margin-left:8px;">Cancella history di contratti rimossi e ricostruisci KPI.</span>
+					</form>
+	
+					<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;" onsubmit="return confirm('ATTENZIONE: questa operazione svuota le tabelle history e KPI e rimaterializza tutto da zero. Procedere?');">
+						<input type="hidden" name="action" value="spm_stats_hard_reindex" />
+						<?php wp_nonce_field('spm_stats_hard_reindex'); ?>
+						<button type="submit" class="button button-primary">⚠️ Hard Reindex (TRUNCATE + Rebuild)</button>
+						<span style="color:#666; display:block; margin-top:6px;">Usa solo in caso di import massivi o incoerenze gravi.</span>
+					</form>
 				</div>
-			</form>
+			</div>
 		</div>
 		<?php
 	}
+
 }
 
 /* ============================================================
