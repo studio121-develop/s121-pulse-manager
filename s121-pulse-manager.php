@@ -8,10 +8,10 @@
 
 defined('ABSPATH') || exit;
 
-// Puntatore al file principale del plugin (usato per link rapidi, ecc.)
-if (!defined('SPM_PLUGIN_FILE')) {
-    define('SPM_PLUGIN_FILE', __FILE__);
-}
+// Puntatore al file principale del plugin (usato per link rapidi, ecc.) ePuntatori globali URL/PATH del plugin (per asset affidabili)
+if (!defined('SPM_PLUGIN_FILE')) { define('SPM_PLUGIN_FILE', __FILE__);}
+if (!defined('SPM_PLUGIN_URL'))  define('SPM_PLUGIN_URL',  plugin_dir_url(__FILE__));
+if (!defined('SPM_PLUGIN_PATH')) define('SPM_PLUGIN_PATH', plugin_dir_path(__FILE__));
 
 // Carica stile admin quando si editano i post del plugin
 add_action('admin_enqueue_scripts', function($hook) {

@@ -101,6 +101,7 @@ class SPM_Contract_Handler {
 		add_action('wp_ajax_spm_contract_action', [__CLASS__, 'handle_ajax_action']);
 
 		// Colonne admin
+
 		add_filter('manage_contratti_posts_columns', [__CLASS__, 'add_admin_columns']);
 		add_action('manage_contratti_posts_custom_column', [__CLASS__, 'render_admin_columns'], 10, 2);
 
@@ -109,6 +110,15 @@ class SPM_Contract_Handler {
 
 		add_action('restrict_manage_posts', [__CLASS__, 'add_admin_filters']); // UI filtri
 		add_filter('parse_query', [__CLASS__, 'apply_admin_filters']);         // Logica filtri
+		
+		add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_select2_for_list']);
+		add_action('wp_ajax_spm_search_cpt', [__CLASS__, 'ajax_search_cpt']);
+		// Disabilita il dropdown mesi ("Tutte le date") nella lista del CPT contratti
+		add_filter('disable_months_dropdown', function ($disable, $post_type) {
+			return ($post_type === 'contratti') ? true : $disable;
+		}, 10, 2);
+
+
 
 		// --- LOCK UI ACF (cliente/servizio dopo creazione; stato se cessato)
 		add_filter('acf/prepare_field/name=cliente',  [__CLASS__, 'acf_lock_cliente']);
@@ -815,7 +825,7 @@ class SPM_Contract_Handler {
 	public static function add_admin_columns($columns) {
 		$new_columns = [
 			'cb'        => $columns['cb'],
-			'title'     => 'Contratto',
+			// 'title'     => 'Contratto',
 			'cliente'   => 'Cliente',
 			'servizio'  => 'Servizio',
 			'scadenza'  => 'Scadenza',
@@ -1151,6 +1161,7 @@ class SPM_Contract_Handler {
 	 * Rende ordinabili alcune colonne della lista contratti.
 	 */
 	public static function add_sortable_columns($columns) {
+		$columns['cliente']  = 'cliente';
 		$columns['servizio']  = 'servizio';
 		$columns['scadenza']  = 'data_prossima_scadenza';
 		$columns['frequenza'] = 'frequenza';
@@ -1190,68 +1201,109 @@ class SPM_Contract_Handler {
 			$query->set('meta_key', 'servizio');
 			$query->set('orderby', 'meta_value_num');
 		}
+		
+		// CLIENTE
+		if ($orderby === 'cliente') {
+			$query->set('meta_key', 'cliente');          // ACF Post Object salva l'ID
+			$query->set('orderby',  'meta_value_num');   // ordina numeric
+		}
+		
 	}
 
 	/**
 	 * Aggiunge i filtri sopra la tabella della lista contratti.
 	 */
-	public static function add_admin_filters($post_type) {
-		if ($post_type !== 'contratti') return;
+public static function add_admin_filters($post_type) {
+		 if ($post_type !== 'contratti') return;
+	 
+		 $sel_cliente  = isset($_GET['filter_cliente'])   ? (int) $_GET['filter_cliente']   : 0;
+		 $sel_servizio = isset($_GET['filter_servizio'])  ? (int) $_GET['filter_servizio']  : 0;
+		 $sel_freq     = isset($_GET['filter_frequenza']) ? sanitize_text_field($_GET['filter_frequenza']) : '';
+		 $sel_stato    = isset($_GET['filter_stato'])     ? sanitize_text_field($_GET['filter_stato'])     : '';
+		 $scad_from    = isset($_GET['filter_scadenza_from']) ? esc_attr($_GET['filter_scadenza_from']) : '';
+		 $scad_to      = isset($_GET['filter_scadenza_to'])   ? esc_attr($_GET['filter_scadenza_to'])   : '';
+	 
+		 $reset_url = remove_query_arg([
+			 'filter_cliente','filter_servizio','filter_frequenza','filter_stato','filter_scadenza_from','filter_scadenza_to'
+		 ]);
+	 
+		 echo '<div class="spm-filter-bar">
+			 <div class="spm-grid">
+	 
+				 <div class="row row-1">
+					 <div class="spm-field">
+						 <label for="spm-filter-cliente" class="screen-reader-text">Clienti</label>
+						 <select id="spm-filter-cliente" name="filter_cliente" class="spm-input" data-placeholder="Clienti">';
+							 if ($sel_cliente) {
+								 printf('<option value="%d" selected>%s</option>', $sel_cliente, esc_html(get_the_title($sel_cliente) ?: ('#'.$sel_cliente)));
+							 }
+		 echo '			</select>
+					 </div>
+	 
+					 <div class="spm-field">
+						 <label for="spm-filter-servizio" class="screen-reader-text">Servizi</label>
+						 <select id="spm-filter-servizio" name="filter_servizio" class="spm-input" data-placeholder="Servizi">';
+							 if ($sel_servizio) {
+								 printf('<option value="%d" selected>%s</option>', $sel_servizio, esc_html(get_the_title($sel_servizio) ?: ('#'.$sel_servizio)));
+							 }
+		 echo '			</select>
+					 </div>
+	 
+					 <div class="spm-field">
+						 <label for="spm-filter-frequenza" class="screen-reader-text">Frequenza</label>
+						 <select id="spm-filter-frequenza" name="filter_frequenza" class="spm-input">
+							 <option value=""'.selected($sel_freq,'',false).'>Tutte le frequenze</option>
+							 <option value="mensile"'.selected($sel_freq,'mensile',false).'>Mensile</option>
+							 <option value="trimestrale"'.selected($sel_freq,'trimestrale',false).'>Trimestrale</option>
+							 <option value="quadrimestrale"'.selected($sel_freq,'quadrimestrale',false).'>Quadrimestrale</option>
+							 <option value="semestrale"'.selected($sel_freq,'semestrale',false).'>Semestrale</option>
+							 <option value="annuale"'.selected($sel_freq,'annuale',false).'>Annuale</option>
+						 </select>
+					 </div>
+				 </div>
+	 
+				 <div class="row row-2">
+					 <div class="spm-field">
+						 <label for="spm-filter-stato" class="screen-reader-text">Stato</label>
+						 <select id="spm-filter-stato" name="filter_stato" class="spm-input">
+							 <option value=""'.selected($sel_stato,'',false).'>Tutti gli stati</option>
+							 <option value="attivo"'.selected($sel_stato,'attivo',false).'>Attivo</option>
+							 <option value="sospeso"'.selected($sel_stato,'sospeso',false).'>Sospeso</option>
+							 <option value="scaduto"'.selected($sel_stato,'scaduto',false).'>Scaduto</option>
+							 <option value="cessato"'.selected($sel_stato,'cessato',false).'>Cessato</option>
+						 </select>
+					 </div>
+	 
+					 <div class="spm-field spm-dates">
+						 <label for="spm-filter-from" class="screen-reader-text">Scadenza da</label>
+						 <input type="date" id="spm-filter-from" name="filter_scadenza_from" class="spm-input" value="'.esc_attr($scad_from).'" />
+						 <label for="spm-filter-to" class="screen-reader-text">Scadenza a</label>
+						 <input type="date" id="spm-filter-to" name="filter_scadenza_to" class="spm-input" value="'.esc_attr($scad_to).'" />
+					 </div>
+	 
+					 <div class="spm-field spm-actions">
+						 <button type="submit" class="button button-primary">Filtra</button>
+						 <a href="'.esc_url($reset_url).'" class="button spm-reset">Reset</a>
+					 </div>
+				 </div>
+	 
+			 </div>
+		 </div>';
+	 
+		 // autosubmit su change per select; le date vanno col pulsante
+		 ?>
+		 <script>
+		 jQuery(function($){
+			 var $form = $('#posts-filter');
+			 $('#spm-filter-cliente, #spm-filter-servizio, #spm-filter-frequenza, #spm-filter-stato')
+				 .on('change', function(){ $form.trigger('submit'); });
+		 });
+		 </script>
+		 <?php
+	 }
 
-		$servizio_post_type = 'servizi';
-		$sel_servizio = isset($_GET['filter_servizio']) ? intval($_GET['filter_servizio']) : 0;
 
-		wp_dropdown_pages([
-			'post_type'         => $servizio_post_type,
-			'name'              => 'filter_servizio',
-			'show_option_all'   => 'Tutti i servizi',
-			'option_none_value' => '',
-			'selected'          => $sel_servizio,
-			'number'            => 0,
-		]);
 
-		$scad_from = isset($_GET['filter_scadenza_from']) ? esc_attr($_GET['filter_scadenza_from']) : '';
-		$scad_to   = isset($_GET['filter_scadenza_to'])   ? esc_attr($_GET['filter_scadenza_to'])   : '';
-		echo '<input type="date" name="filter_scadenza_from" value="' . $scad_from . '" placeholder="Scadenza da" style="margin-left:8px" />';
-		echo '<input type="date" name="filter_scadenza_to"   value="' . $scad_to   . '" placeholder="Scadenza a"  style="margin-left:4px" />';
-
-		$freq_options = [
-			''               => 'Tutte le frequenze',
-			'mensile'        => 'Mensile',
-			'trimestrale'    => 'Trimestrale',
-			'quadrimestrale' => 'Quadrimestrale',
-			'semestrale'     => 'Semestrale',
-			'annuale'        => 'Annuale',
-		];
-		$sel_freq = isset($_GET['filter_frequenza']) ? sanitize_text_field($_GET['filter_frequenza']) : '';
-		echo '<select name="filter_frequenza" style="margin-left:8px">';
-		foreach ($freq_options as $val => $label) {
-			printf('<option value="%s"%s>%s</option>',
-				esc_attr($val),
-				selected($sel_freq, $val, false),
-				esc_html($label)
-			);
-		}
-		echo '</select>';
-
-		$stato_options = [
-			''         => 'Tutti gli stati',
-			'attivo'   => 'Attivo',
-			'sospeso'  => 'Sospeso',
-			'scaduto'  => 'Scaduto',
-			'cessato'  => 'Cessato',
-		];
-		$sel_stato = isset($_GET['filter_stato']) ? sanitize_text_field($_GET['filter_stato']) : '';
-		echo '<select name="filter_stato" style="margin-left:8px">';
-		foreach ($stato_options as $val => $label) {
-			printf('<option value="%s"%s>%s</option>',
-				esc_attr($val),
-				selected($sel_stato, $val, false),
-				esc_html($label)
-			);
-		}
-		echo '</select>';
-	}
 
 	/**
 	 * Applica i filtri alla query principale della lista contratti.
@@ -1259,34 +1311,49 @@ class SPM_Contract_Handler {
 	public static function apply_admin_filters($query) {
 		if (!is_admin() || !$query->is_main_query()) return;
 		if ($query->get('post_type') !== 'contratti') return;
-
-		$meta_query = [];
-		$meta_query['relation'] = 'AND';
-
-		// Servizio
+	
+		$meta_query = ['relation' => 'AND'];
+	
+		// CLIENTE (ACF Post Object salva l'ID)
+		if (!empty($_GET['filter_cliente'])) {
+			$cliente_id = intval($_GET['filter_cliente']);
+			if ($cliente_id > 0) {
+				$meta_query[] = [
+					'key'     => 'cliente',
+					'value'   => $cliente_id,
+					'compare' => '=',
+				];
+			}
+		}
+	
+		// SERVIZIO (ACF Post Object salva l'ID)
 		if (!empty($_GET['filter_servizio'])) {
 			$servizio_id = intval($_GET['filter_servizio']);
 			if ($servizio_id > 0) {
-				$meta_query[] = [ 'key' => 'servizio', 'value' => $servizio_id, 'compare' => '=' ];
+				$meta_query[] = [
+					'key'     => 'servizio',
+					'value'   => $servizio_id,
+					'compare' => '=',
+				];
 			}
 		}
-
-		// Frequenza
+	
+		// FREQUENZA
 		if (!empty($_GET['filter_frequenza'])) {
 			$freq = sanitize_text_field($_GET['filter_frequenza']);
 			$meta_query[] = [ 'key' => 'frequenza', 'value' => $freq, 'compare' => '=' ];
 		}
-
-		// Stato
+	
+		// STATO
 		if (!empty($_GET['filter_stato'])) {
 			$stato = sanitize_text_field($_GET['filter_stato']);
 			$meta_query[] = [ 'key' => 'stato', 'value' => $stato, 'compare' => '=' ];
 		}
-
-		// Scadenza (intervallo date YYYY-MM-DD)
+	
+		// SCADENZA (intervallo)
 		$from = !empty($_GET['filter_scadenza_from']) ? sanitize_text_field($_GET['filter_scadenza_from']) : '';
 		$to   = !empty($_GET['filter_scadenza_to'])   ? sanitize_text_field($_GET['filter_scadenza_to'])   : '';
-
+	
 		if ($from && $to) {
 			$meta_query[] = [
 				'key'     => 'data_prossima_scadenza',
@@ -1309,12 +1376,11 @@ class SPM_Contract_Handler {
 				'type'    => 'CHAR',
 			];
 		}
-
+	
 		if (count($meta_query) > 1) {
 			$query->set('meta_query', $meta_query);
 		}
 	}
-
 	/* ================== LOCK UI (ACF) ================== */
 
 	public static function acf_lock_cliente($field){
@@ -1509,4 +1575,151 @@ class SPM_Contract_Handler {
 
 		wp_send_json_success(['message' => 'Dati ACF salvati']);
 	}
+	
+	/**
+	 * Dropdown generico per CPT (funziona anche se non gerarchico).
+	 * args: post_type, name, show_option_all, selected, style
+	 */
+	private static function admin_render_cpt_dropdown(array $args) {
+		$defaults = [
+			'post_type'       => 'post',
+			'name'            => 'filter_any',
+			'show_option_all' => 'Tutti',
+			'selected'        => 0,
+			'style'           => '',
+		];
+		$a = array_merge($defaults, $args);
+	
+		$q = new WP_Query([
+			'post_type'      => $a['post_type'],
+			'posts_per_page' => 1000,
+			'post_status'    => ['publish','private'],
+			'orderby'        => 'title',
+			'order'          => 'ASC',
+			'fields'         => 'ids',
+		]);
+	
+		echo '<select name="'.esc_attr($a['name']).'" style="'.esc_attr($a['style']).'">';
+		printf('<option value="">%s</option>', esc_html($a['show_option_all']));
+	
+		if ($q->have_posts()) {
+			foreach ($q->posts as $pid) {
+				printf(
+					'<option value="%d"%s>%s</option>',
+					$pid,
+					selected($a['selected'], $pid, false),
+					esc_html(get_the_title($pid) ?: ('#'.$pid))
+				);
+			}
+		}
+		echo '</select>';
+	}
+	
+	/**
+	 * Enqueue Select2 + init AJAX filters sulla lista contratti
+	 */
+	/**
+	 * Enqueue Select2 (via CDN) + init filters per lista contratti
+	 */
+	public static function enqueue_select2_for_list($hook) {
+		if ($hook !== 'edit.php') return;
+		if (($_GET['post_type'] ?? '') !== 'contratti') return;
+	
+		// CSS nostro (admin.css) anche nella lista contratti
+		wp_enqueue_style(
+			'spm-admin',
+			plugin_dir_url(__FILE__) . '../assets/css/admin.css',
+			[],
+			'2.0.1'
+		);
+	
+		// Select2 da CDN
+		wp_enqueue_style(
+			'spm-select2',
+			'https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/css/select2.min.css',
+			[],
+			'4.0.13'
+		);
+		wp_enqueue_script(
+			'spm-select2',
+			'https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/js/select2.full.min.js',
+			['jquery'],
+			'4.0.13',
+			true
+		);
+	
+		// JS di inizializzazione (dipende da select2)
+		wp_enqueue_script(
+			'spm-contratti-filters',
+			plugin_dir_url(__FILE__) . '../assets/js/spm-contratti-filters.js',
+			['jquery','spm-select2'],
+			'1.0.1',
+			true
+		);
+	
+		// Passa variabili al JS
+		wp_localize_script('spm-contratti-filters', 'SPM_FILTERS', [
+			'ajaxUrl'     => admin_url('admin-ajax.php'),
+			'nonce'       => wp_create_nonce('spm_search_cpt'),
+			'preCliente'  => isset($_GET['filter_cliente'])  ? (int) $_GET['filter_cliente']  : 0,
+			'preServizio' => isset($_GET['filter_servizio']) ? (int) $_GET['filter_servizio'] : 0,
+		]);
+	}
+	/**
+	 * AJAX: ricerca generica su CPT per Select2 (clienti/servizi)
+	 * Ritorna { items:[{id,text}], more:bool }
+	 */
+	public static function ajax_search_cpt(){
+		check_ajax_referer('spm_search_cpt');
+	
+		if (!current_user_can('edit_posts')) {
+			wp_send_json_error(['message' => 'Non autorizzato'], 403);
+		}
+	
+		$post_type = sanitize_key($_REQUEST['post_type'] ?? '');
+		$q         = sanitize_text_field($_REQUEST['q'] ?? '');
+		$page      = max(1, (int)($_REQUEST['page'] ?? 1));
+	
+		// Whitelist dei CPT ammessi
+		$allowed = ['clienti','servizi'];
+		if (!in_array($post_type, $allowed, true)) {
+			wp_send_json_error(['message' => 'CPT non permesso'], 400);
+		}
+	
+		$per_page = 30;
+		$args = [
+			'post_type'      => $post_type,
+			'posts_per_page' => $per_page,
+			'paged'          => $page,
+			'post_status'    => ['publish','private'],
+			'orderby'        => 'title',
+			'order'          => 'ASC',
+			's'              => $q,
+			'fields'         => 'ids',
+			// Per ottimizzare la LIKE sul titolo
+			'meta_query'     => [],
+		];
+	
+		$query = new WP_Query($args);
+	
+		$items = [];
+		if ($query->have_posts()) {
+			foreach ($query->posts as $pid) {
+				$title = get_the_title($pid);
+				$items[] = [
+					'id'   => $pid,
+					'text' => $title !== '' ? $title : ('#'.$pid),
+				];
+			}
+		}
+	
+		$more = ($query->max_num_pages > $page);
+	
+		wp_send_json_success([
+			'items' => $items,
+			'more'  => $more,
+		]);
+	}
+	
+
 }

@@ -1,6 +1,106 @@
+/* === Azioni box (lascia com'è se già usato altrove) === */
 #spm-actions-box .button-primary {
-    width: 100%;
-    text-align: center;
-    font-size: 15px;
-    padding: 8px 0;
+  width: 100%;
+  text-align: center;
+  font-size: 15px;
+  padding: 8px 0;
 }
+
+/* === Barra filtri lista contratti === */
+.wp-admin .spm-filter-bar {
+  margin: 0px 8px 0 0;
+}
+
+.wp-admin .spm-grid {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 8px;
+}
+
+/* Righe */
+.wp-admin .spm-grid .row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr; /* 3 colonne */
+  gap: 8px;
+  align-items: center;
+}
+
+/* Campi */
+.wp-admin .spm-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Input base */
+.wp-admin .spm-input {
+  width: 100%;
+  min-height: 32px;
+  height: 32px;
+  padding: 2px 8px;
+  box-sizing: border-box;
+}
+
+/* Range date affiancate */
+.wp-admin .spm-field.spm-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* Azioni a destra, no wrap */
+.wp-admin .spm-field.spm-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.wp-admin .spm-field.spm-actions .button {
+  height: 32px;
+  line-height: 30px;
+  padding: 0 10px;
+}
+
+/* Select2 uniformato allo stile WP */
+.wp-admin .select2-container {
+  width: 100% !important;
+  min-width: 0;
+}
+.wp-admin .select2-container--default .select2-selection--single {
+  height: 32px;
+  border: 1px solid #8c8f94;
+  border-radius: 3px;
+}
+.wp-admin .select2-container--default .select2-selection--single .select2-selection__rendered {
+  line-height: 30px;
+  padding-left: 8px;
+}
+.wp-admin .select2-container--default .select2-selection--single .select2-selection__arrow {
+  height: 30px;
+  right: 6px;
+}
+.wp-admin .select2-dropdown {
+  border: 1px solid #8c8f94;
+  border-radius: 3px;
+}
+/* Nasconde il bottone "Filtra" di default nella list table dei contratti */
+.wp-admin.post-type-contratti #post-query-submit {
+  display: none !important;
+}
+
+.alignleft.actions{
+    padding-bottom: 15px;
+}
+
+/* Responsive: sotto 1200px restano 3 colonne, sotto 900 → 2 colonne, sotto 600 → 1 colonna */
+@media (max-width: 900px) {
+  .wp-admin .spm-grid .row { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 600px) {
+  .wp-admin .spm-grid .row { grid-template-columns: 1fr; }
+  .wp-admin .spm-field.spm-dates { grid-template-columns: 1fr; }
+  .wp-admin .spm-field.spm-actions { justify-content: stretch; }
+  .wp-admin .spm-field.spm-actions .button { flex: 1; text-align: center; }
+}
+
