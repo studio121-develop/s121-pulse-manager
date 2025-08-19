@@ -61,12 +61,9 @@ require_once plugin_dir_path(__FILE__) . 'api/fatture-in-cloud.php';
 // ==========================================================
 // Menu amministrazione centralizzato (raggruppa dashboard + CPT sotto "Pulse Manager")
 require_once plugin_dir_path(__FILE__) . 'includes/class-admin-menu.php';
-SPM_Admin_Menu::init();
 
 // Pagina Impostazioni plugin (Policy contratti, ecc.)
 require_once plugin_dir_path(__FILE__) . 'includes/class-settings-page.php';
-SPM_Settings_Page::init();
-
 
 // ==========================================================
 // INIT
@@ -100,17 +97,6 @@ add_action('admin_init', function () {
         exit;
     }
 });
-
-
-// ==========================================================
-// DASHBOARD REDIRECT
-// ==========================================================
-// Callback usata per aprire la dashboard dei contratti dal menu plugin
-function spm_render_main_dashboard() {
-    // Redirect alla dashboard contratti
-    wp_redirect(admin_url('edit.php?post_type=contratti&page=contratti-dashboard'));
-    exit;
-}
 
 
 // Admin trigger per backfill (solo admin)
@@ -150,3 +136,4 @@ add_action('admin_init', function () {
         wp_die('Backfill RANGE completato: ' . esc_html(json_encode($res)));
     }
 });
+

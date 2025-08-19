@@ -91,3 +91,4 @@ class SPM_Admin_Menu {
 		});
 	}
 }
+SPM_Admin_Menu::init();

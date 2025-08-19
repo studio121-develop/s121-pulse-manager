@@ -508,7 +508,98 @@ final class SPM_Statistics_Handler {
 		return count($ids);
 	}
 	
+	/** Trova il mese più antico tra i contratti (YYYY-MM) */
+	public function find_earliest_month(): ?string {
+		$q = new WP_Query([
+			'post_type'      => 'contratti',
+			'post_status'    => 'publish',
+			'fields'         => 'ids',
+			'posts_per_page' => -1,
+		]);
+		$min = null;
+		foreach ($q->posts as $cid) {
+			$m = $this->detect_start_month((int)$cid);
+			if ($m && (!$min || strcmp($m, $min) < 0)) $min = $m;
+		}
+		return $min ?: '2020-01';
+	}
+	
+	/** Solo KPI: ricostruisce i KPI su un range (non tocca history) */
+	public function rebuild_kpis_only(?string $from_yyyymm = null, ?string $to_yyyymm = null): void {
+		$from = $from_yyyymm ?: $this->find_earliest_month();
+		$to   = $to_yyyymm   ?: current_time('Y-m');
+		$this->rebuild_kpis_range($from, $to);
+	}
+	
+	/** Pulisce righe orfane (contratti cancellati) e ricostruisce KPI */
+	public function purge_orphans_and_rebuild(?string $from_yyyymm = null, ?string $to_yyyymm = null): array {
+		$from = $from_yyyymm ?: '2020-01';
+		$to   = $to_yyyymm   ?: current_time('Y-m');
+		$purged = $this->purge_deleted_contracts();
+		$this->rebuild_kpis_range($from, $to);
+		return ['purged_contracts' => $purged, 'rebuilt_from' => $from, 'rebuilt_to' => $to];
+	}
+	
+	/**
+	 * HARD REINDEX: svuota completamente tabelle history+KPI e rimaterializza tutto
+	 * Usa solo se vuoi un rebuild totale da zero.
+	 */
+	public function hard_reindex_all(?string $from_yyyymm = null, ?string $to_yyyymm = null): array {
+		global $wpdb;
+		$from = $from_yyyymm ?: $this->find_earliest_month();
+		$to   = $to_yyyymm   ?: current_time('Y-m');
+	
+		// Svuota
+		$wpdb->query("TRUNCATE TABLE {$this->history_table}");
+		$wpdb->query("TRUNCATE TABLE {$this->kpi_table}");
+	
+		// Backfill di tutti i contratti nel range
+		$q = new WP_Query([
+			'post_type'      => 'contratti',
+			'post_status'    => 'publish',
+			'fields'         => 'ids',
+			'posts_per_page' => -1,
+		]);
+		$ok=0; $fail=0;
+		foreach ($q->posts as $cid) {
+			$n = $this->backfill_contract((int)$cid, $from, $to);
+			if ($n >= 0) $ok++; else $fail++;
+		}
+	
+		// KPI finali
+		$this->rebuild_kpis_range($from, $to);
+	
+		return [
+			'contracts_ok'   => $ok,
+			'contracts_fail' => $fail,
+			'from'           => $from,
+			'to'             => $to,
+		];
+	}
+
+	
 }
 
 // Bootstrap
 SPM_Statistics_Handler::instance();
+	
+	if (defined('WP_CLI') && WP_CLI) {
+		WP_CLI::add_command('spm stats:rebuild-kpis', function($args, $assoc_args){
+			$h = SPM_Statistics_Handler::instance();
+			$h->rebuild_kpis_only($assoc_args['from'] ?? null, $assoc_args['to'] ?? null);
+			WP_CLI::success('KPI rebuilt.');
+		});
+	
+		WP_CLI::add_command('spm stats:purge-orphans', function($args, $assoc_args){
+			$h = SPM_Statistics_Handler::instance();
+			$r = $h->purge_orphans_and_rebuild($assoc_args['from'] ?? null, $assoc_args['to'] ?? null);
+			WP_CLI::success('Purged: ' . $r['purged_contracts'] . ' | Range KPI: ' . $r['rebuilt_from'] . ' → ' . $r['rebuilt_to']);
+		});
+	
+		WP_CLI::add_command('spm stats:hard-reindex', function($args, $assoc_args){
+			$h = SPM_Statistics_Handler::instance();
+			$r = $h->hard_reindex_all($assoc_args['from'] ?? null, $assoc_args['to'] ?? null);
+			WP_CLI::success('Hard reindex done. OK=' . $r['contracts_ok'] . ' FAIL=' . $r['contracts_fail'] . ' | Range: ' . $r['from'] . ' → ' . $r['to']);
+		});
+	}
+
