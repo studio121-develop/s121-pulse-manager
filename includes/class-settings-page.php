@@ -37,9 +37,18 @@ class SPM_Settings_Page {
 	/** Valori di default per le impostazioni */
 	public static function defaults() {
 		return [
+			// Policy contratti
 			'tolleranza_scaduto_giorni' => 60, // entro questa soglia si può allineare
 			'auto_cessazione_giorni'    => 90, // oltre questa soglia → cessato
+			
+			// Frontend
+			'frontend_mode'                 => 'static', // normal | static | off
+			'frontend_redirect_logged_in'   => 1,        // 1/0
+			'frontend_noindex'              => 1,        // 1/0
+			'frontend_static_html'          => '',       // HTML custom opzionale
 		];
+		
+		
 	}
 
 	/** Legge in sicurezza una chiave di opzione, con fallback ai default */
@@ -107,6 +116,22 @@ class SPM_Settings_Page {
 			$out['auto_cessazione_giorni'] = $out['tolleranza_scaduto_giorni'];
 			add_settings_error(self::OPTION_NAME, 'spm_policy_adjust',
 				'Auto-cessazione riallineata alla tolleranza: non può essere inferiore.', 'updated');
+		}
+		
+		// ===== Frontend =====
+		$mode = isset($in['frontend_mode']) ? sanitize_text_field($in['frontend_mode']) : $out['frontend_mode'];
+		if (!in_array($mode, ['normal','static','off'], true)) {
+			$mode = 'static';
+		}
+		$out['frontend_mode'] = $mode;
+		
+		$out['frontend_redirect_logged_in'] = !empty($in['frontend_redirect_logged_in']) ? 1 : 0;
+		$out['frontend_noindex']            = !empty($in['frontend_noindex']) ? 1 : 0;
+		
+		if (array_key_exists('frontend_static_html', $in)) {
+			$out['frontend_static_html'] = current_user_can('unfiltered_html')
+				? (string)$in['frontend_static_html']
+				: wp_kses_post((string)$in['frontend_static_html']);
 		}
 
 		return $out;
@@ -206,6 +231,40 @@ class SPM_Settings_Page {
 						<span style="color:#666;">giorni</span>
 					</div>
 					<p style="margin:0; color:#666;">Superata questa soglia, lo stato passa a <strong>cessato</strong> e il rinnovo è bloccato.</p>
+					
+					<hr style="margin:24px 0;">
+					<h2 style="margin:0 0 12px 0;">🌐 Frontend pubblico</h2>
+					
+					<div style="display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:center;">
+					
+						<label for="spm_frontend_mode" style="font-weight:600;">Modalità</label>
+						<select id="spm_frontend_mode" name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_mode]">
+							<?php $m = (string) self::get('frontend_mode'); ?>
+							<option value="normal" <?php selected($m,'normal'); ?>>normal – lascia il tema attivo</option>
+							<option value="static" <?php selected($m,'static'); ?>>static – pagina statica minimale</option>
+							<option value="off"    <?php selected($m,'off');    ?>>off – solo backend (login)</option>
+						</select>
+						<span class="description" style="grid-column:2 / span 1; color:#666;">Richiede il file/class SPM_Frontend_Controller.</span>
+					
+						<label for="spm_frontend_redirect" style="font-weight:600;">Se loggato, vai in Bacheca</label>
+						<input id="spm_frontend_redirect" type="checkbox" value="1"
+							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_redirect_logged_in]"
+							<?php checked( (int) self::get('frontend_redirect_logged_in'), 1 ); ?> />
+						<span class="description" style="grid-column:2 / span 1; color:#666;">Valido in modalità <em>static</em>.</span>
+					
+						<label for="spm_frontend_noindex" style="font-weight:600;">Noindex/Nofollow</label>
+						<input id="spm_frontend_noindex" type="checkbox" value="1"
+							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_noindex]"
+							<?php checked( (int) self::get('frontend_noindex'), 1 ); ?> />
+						<span class="description" style="grid-column:2 / span 1; color:#666;">Invia X-Robots-Tag e meta robots come noindex.</span>
+					
+						<label for="spm_frontend_html" style="font-weight:600; align-self:start;">HTML pagina statica (opzionale)</label>
+						<textarea id="spm_frontend_html" rows="8" style="width:100%;"
+							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_static_html]"><?php
+							echo esc_textarea( (string) self::get('frontend_static_html') ); ?></textarea>
+						<span class="description" style="grid-column:2 / span 1; color:#666;">Lascia vuoto per usare il template predefinito del controller.</span>
+					</div>
+
 	
 					<div style="margin-top:18px;">
 						<?php submit_button('💾 Salva impostazioni'); ?>

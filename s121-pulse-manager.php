@@ -48,6 +48,8 @@ register_activation_hook(__FILE__, function() {
 // ADMIN
 // ==========================================================
 require_once plugin_dir_path(__FILE__) . 'admin/dashboard-contratti.php';  // NUOVO
+require_once plugin_dir_path(__FILE__) . 'includes/class-spm-frontend-controller.php';
+
 
 
 // ==========================================================
