@@ -1175,41 +1175,35 @@ class SPM_Contract_Handler {
 	public static function handle_sortable_and_filters($query) {
 		if (!is_admin() || !$query->is_main_query()) return;
 		if ($query->get('post_type') !== 'contratti') return;
-
+	
 		$orderby = $query->get('orderby');
-
-		// SCADENZA (campo meta YYYY-MM-DD)
+	
 		if ($orderby === 'data_prossima_scadenza' || $orderby === 'scadenza') {
 			$query->set('meta_key', 'data_prossima_scadenza');
 			$query->set('orderby', 'meta_value');
+			$query->set('meta_type', 'DATE'); // <-- importante
 		}
-
-		// FREQUENZA (meta testuale)
+	
 		if ($orderby === 'frequenza') {
 			$query->set('meta_key', 'frequenza');
 			$query->set('orderby', 'meta_value');
 		}
-
-		// STATO (meta testuale)
+	
 		if ($orderby === 'stato') {
 			$query->set('meta_key', 'stato');
 			$query->set('orderby', 'meta_value');
 		}
-
-		// SERVIZIO (ACF post object: salviamo l'ID nel meta 'servizio')
+	
 		if ($orderby === 'servizio') {
 			$query->set('meta_key', 'servizio');
 			$query->set('orderby', 'meta_value_num');
 		}
-		
-		// CLIENTE
+	
 		if ($orderby === 'cliente') {
-			$query->set('meta_key', 'cliente');          // ACF Post Object salva l'ID
-			$query->set('orderby',  'meta_value_num');   // ordina numeric
+			$query->set('meta_key', 'cliente');
+			$query->set('orderby', 'meta_value_num');
 		}
-		
 	}
-
 	/**
 	 * Aggiunge i filtri sopra la tabella della lista contratti.
 	 */
@@ -1314,26 +1308,28 @@ public static function add_admin_filters($post_type) {
 	
 		$meta_query = ['relation' => 'AND'];
 	
-		// CLIENTE (ACF Post Object salva l'ID)
+		// CLIENTE
 		if (!empty($_GET['filter_cliente'])) {
-			$cliente_id = intval($_GET['filter_cliente']);
+			$cliente_id = (int) $_GET['filter_cliente'];
 			if ($cliente_id > 0) {
 				$meta_query[] = [
 					'key'     => 'cliente',
 					'value'   => $cliente_id,
 					'compare' => '=',
+					'type'    => 'NUMERIC',
 				];
 			}
 		}
 	
-		// SERVIZIO (ACF Post Object salva l'ID)
+		// SERVIZIO
 		if (!empty($_GET['filter_servizio'])) {
-			$servizio_id = intval($_GET['filter_servizio']);
+			$servizio_id = (int) $_GET['filter_servizio'];
 			if ($servizio_id > 0) {
 				$meta_query[] = [
 					'key'     => 'servizio',
 					'value'   => $servizio_id,
 					'compare' => '=',
+					'type'    => 'NUMERIC',
 				];
 			}
 		}
@@ -1341,39 +1337,58 @@ public static function add_admin_filters($post_type) {
 		// FREQUENZA
 		if (!empty($_GET['filter_frequenza'])) {
 			$freq = sanitize_text_field($_GET['filter_frequenza']);
-			$meta_query[] = [ 'key' => 'frequenza', 'value' => $freq, 'compare' => '=' ];
+			$meta_query[] = [
+				'key'     => 'frequenza',
+				'value'   => $freq,
+				'compare' => '=',
+			];
 		}
 	
 		// STATO
 		if (!empty($_GET['filter_stato'])) {
 			$stato = sanitize_text_field($_GET['filter_stato']);
-			$meta_query[] = [ 'key' => 'stato', 'value' => $stato, 'compare' => '=' ];
+			$meta_query[] = [
+				'key'     => 'stato',
+				'value'   => $stato,
+				'compare' => '=',
+			];
 		}
 	
-		// SCADENZA (intervallo)
-		$from = !empty($_GET['filter_scadenza_from']) ? sanitize_text_field($_GET['filter_scadenza_from']) : '';
-		$to   = !empty($_GET['filter_scadenza_to'])   ? sanitize_text_field($_GET['filter_scadenza_to'])   : '';
+		// --- SCADENZA come DATE ---
+		$from = isset($_GET['filter_scadenza_from']) ? trim($_GET['filter_scadenza_from']) : '';
+		$to   = isset($_GET['filter_scadenza_to'])   ? trim($_GET['filter_scadenza_to'])   : '';
 	
-		if ($from && $to) {
+		// helper: valida YYYY-MM-DD
+		$is_valid_date = function($d) {
+			if (!$d) return false;
+			if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) return false;
+			[$Y,$m,$d2] = array_map('intval', explode('-', $d));
+			return checkdate($m, $d2, $Y);
+		};
+	
+		$has_from = $is_valid_date($from);
+		$has_to   = $is_valid_date($to);
+	
+		if ($has_from && $has_to) {
 			$meta_query[] = [
 				'key'     => 'data_prossima_scadenza',
 				'value'   => [$from, $to],
 				'compare' => 'BETWEEN',
-				'type'    => 'CHAR',
+				'type'    => 'DATE',   // <-- CAST come DATE
 			];
-		} elseif ($from) {
+		} elseif ($has_from) {
 			$meta_query[] = [
 				'key'     => 'data_prossima_scadenza',
 				'value'   => $from,
 				'compare' => '>=',
-				'type'    => 'CHAR',
+				'type'    => 'DATE',
 			];
-		} elseif ($to) {
+		} elseif ($has_to) {
 			$meta_query[] = [
 				'key'     => 'data_prossima_scadenza',
 				'value'   => $to,
 				'compare' => '<=',
-				'type'    => 'CHAR',
+				'type'    => 'DATE',
 			];
 		}
 	
