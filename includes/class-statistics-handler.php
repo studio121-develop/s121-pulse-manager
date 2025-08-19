@@ -107,6 +107,11 @@ final class SPM_Statistics_Handler {
 	
 		// Mese di partenza dedotto dai meta (data_attivazione o post_date)
 		$start = $this->detect_start_month((int)$post_id);
+		
+		// 🛑 Se il contratto parte nel futuro, non materializzare nulla ora
+		if ($start && strcmp($cur, $start) < 0) {
+			return;
+		}
 	
 		if (!$has_history && $start && strcmp($start, $cur) < 0) {
 			// Primo salvataggio di un contratto nato mesi fa → riempi tutto fino ad oggi
@@ -128,6 +133,10 @@ final class SPM_Statistics_Handler {
 		]);
 		if (!empty($q->posts)) {
 			foreach ($q->posts as $cid) {
+				// 🛑 Salta se il contratto parte dopo il mese corrente
+				$start = $this->detect_start_month((int)$cid);
+				if ($start && strcmp($yyyymm, $start) < 0) continue;
+		
 				$this->materialize_month((int)$cid, $yyyymm);
 			}
 		}
@@ -200,6 +209,13 @@ final class SPM_Statistics_Handler {
 
 	/** 1 mese x 1 contratto (idempotente su UNIQUE month+contract) */
 	public function materialize_month(int $contract_id, string $yyyymm): bool {
+		
+		// 🛑 Se il mese richiesto è precedente al mese di attivazione, non materializzare
+		$start = $this->detect_start_month($contract_id); // "YYYY-MM"
+		if ($start && strcmp($yyyymm, $start) < 0) {
+			return false;
+		}
+		
 		$cd = $this->load_contract_data($contract_id);
 		if (!$cd) return false;
 
