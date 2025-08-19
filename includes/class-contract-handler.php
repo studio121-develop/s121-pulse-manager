@@ -415,8 +415,8 @@ class SPM_Contract_Handler {
 		$utente = $current_user->display_name ?: 'Sistema';
 
 		$storico_entry = [
-			'data_operazione' => date('Y-m-d'),
-			'ora_operazione'  => date('H:i'),
+			'data_operazione' => wp_date('Y-m-d'),
+			'ora_operazione'  => wp_date('H:i'),
 			'tipo_operazione' => $tipo_operazione,
 			'importo'         => $importo,
 			'utente'          => $utente,
@@ -686,7 +686,7 @@ class SPM_Contract_Handler {
 				'relation' => 'AND',
 				[ 'key' => 'rinnovo_automatico', 'value' => '1' ],
 				[ 'key' => 'stato', 'value' => ['attivo', 'scaduto'], 'compare' => 'IN' ],
-				[ 'key' => 'data_prossima_scadenza', 'value' => date('Y-m-d'), 'compare' => '<=' ],
+				[ 'key' => 'data_prossima_scadenza', 'value' => current_time('Y-m-d'), 'compare' => '<=' ],
 			]
 		];
 
