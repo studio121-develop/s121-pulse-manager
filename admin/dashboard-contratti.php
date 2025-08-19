@@ -44,6 +44,11 @@ function spm_render_dashboard() {
 	// Parametri UI: periodo (from/to) + vista (chart/table) + debug (mese singolo)
 	list($from_ym, $to_ym, $view_mode) = spm_dashboard_parse_range_params();
 	$debug_month = isset($_GET['debug_month']) ? sanitize_text_field($_GET['debug_month']) : '';
+	
+	
+	//Mese Corrente	
+	$current_month = date_i18n('F Y');
+
 
 	?>
 	<div class="wrap">
@@ -124,14 +129,16 @@ function spm_render_dashboard() {
 			<div style="flex:1 1 240px; background:white; padding:20px; border-left:4px solid #2271b1; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
 				<h3 style="margin-top:0; color:#2271b1;">💰 MRR</h3>
 				<p style="font-size:32px; margin:0; font-weight:bold;">€ <?php echo number_format($mrr, 2, ',', '.'); ?></p>
-				<p style="color:#666; margin:5px 0 0 0;">Monthly Recurring Revenue (mese corrente)</p>
+				<p style="color:#666; margin:5px 0 0 0;">
+					Monthly Recurring Revenue (<?php echo esc_html($current_month); ?>)
+				</p>
 			</div>
 
 			<div style="flex:1 1 240px; background:white; padding:20px; border-left:4px solid #6c2eb9; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
 				<h3 style="margin-top:0; color:#6c2eb9;">👤 ARPU</h3>
 				<p style="font-size:32px; margin:0; font-weight:bold;">€ <?php echo number_format($arpu, 2, ',', '.'); ?></p>
 				<p style="color:#666; margin:5px 0 0 0;">
-					<?php echo $active_customers > 0 ? "Su {$active_customers} clienti attivi" : "Nessun cliente attivo"; ?>
+					<?php echo $active_customers > 0 ? "Su {$active_customers} clienti attivi con revenue > 0" : "Nessun cliente attivo"; ?>
 				</p>
 			</div>
 
