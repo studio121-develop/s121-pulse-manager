@@ -215,6 +215,142 @@ class SPM_Date_Helper {
 		$days = self::days_until_due($date);
 		return $days >= 0 && $days <= $days_threshold;
 	}
+	
+	/* ===================== BACKFILL API ===================== */
+	
+	/**
+	 * Backfill di TUTTI i contratti non cessati.
+	 * @param string|null $fromYm  es. '2024-01' (opzionale)
+	 * @param string|null $toYm    es. '2025-08' (opzionale)
+	 * @param bool        $reset   se true, cancella le righe ledger nel range prima di rigenerare
+	 * @return array {processed:int, deleted:int}
+	 */
+	public static function backfill_all(?string $fromYm = null, ?string $toYm = null, bool $reset = false): array {
+	  $q = new WP_Query([
+		'post_type' => 'contratti',
+		'posts_per_page' => -1,
+		'fields' => 'ids',
+		'meta_query' => [[
+		  'key' => 'stato',
+		  'value' => ['attivo','sospeso','scaduto'],
+		  'compare' => 'IN',
+		]],
+	  ]);
+	  $deleted = 0;
+	  if ($q->have_posts()) {
+		foreach ($q->posts as $cid) {
+		  $cid = (int)$cid;
+		  if ($reset) $deleted += self::delete_ledger_range_for_contract($cid, $fromYm, $toYm);
+		  self::materialize_for_range($cid, $fromYm, $toYm);
+		}
+	  }
+	  return ['processed' => (int)$q->found_posts, 'deleted' => $deleted];
+	}
+	
+	/**
+	 * Backfill di un singolo contratto, con range opzionale e reset.
+	 * @param int         $contract_id
+	 * @param string|null $fromYm es. '2024-01'
+	 * @param string|null $toYm   es. '2025-08'
+	 * @param bool        $reset
+	 * @return int numero righe cancellate se reset
+	 */
+	public static function backfill_contract(int $contract_id, ?string $fromYm = null, ?string $toYm = null, bool $reset = false): int {
+	  $deleted = 0;
+	  if ($reset) $deleted = self::delete_ledger_range_for_contract($contract_id, $fromYm, $toYm);
+	  self::materialize_for_range($contract_id, $fromYm, $toYm);
+	  return $deleted;
+	}
+	
+	/* ===================== HELPERS BACKFILL ===================== */
+	
+	/**
+	 * Materializza righe per un contratto LIMITANDO al range (YYYY-MM) se passato.
+	 * Se nessun range, usa la logica standard: da attivazione fino a (EOM + horizon).
+	 */
+	private static function materialize_for_range(int $contract_id, ?string $fromYm, ?string $toYm): void {
+	  $stato = get_field('stato', $contract_id);
+	  if ($stato === 'cessato') return;
+	
+	  $cadence = get_field('cadenza_fatturazione', $contract_id);
+	  if (!$cadence) return;
+	
+	  $attivazione = get_field('data_attivazione', $contract_id);
+	  $start_db = SPM_Date_Helper::to_db_format($attivazione);
+	  if (!$start_db) return;
+	
+	  $tz = wp_timezone();
+	
+	  // Calcola limiti
+	  $defaultStart = (new DateTime($start_db, $tz))->modify('first day of this month')->setTime(0,0,0);
+	  $defaultEnd   = (new DateTime('today', $tz))->modify('last day of this month')->modify('+'.self::horizon_months().' months')->setTime(0,0,0);
+	
+	  $rangeStart = $fromYm ? self::first_day_of_ym($fromYm, $tz) : $defaultStart;
+	  $rangeEnd   = $toYm   ? self::last_day_of_ym($toYm,   $tz) : $defaultEnd;
+	
+	  // Se l'attivazione è dopo l'inizio range, parte dall'attivazione
+	  if ($defaultStart > $rangeStart) $rangeStart = $defaultStart;
+	
+	  // Cursor = inizio range (allineato a primo del mese)
+	  $cursor = (clone $rangeStart)->modify('first day of this month')->setTime(0,0,0);
+	
+	  while ($cursor <= $rangeEnd) {
+		[$pStart, $pEnd] = self::period_bounds($cursor, $cadence);
+		if ($pStart > $rangeEnd) break;            // fuori range
+		if ($pEnd   < $rangeStart) {               // prima del range → salta
+		  $cursor = (clone $pEnd)->modify('+1 day');
+		  continue;
+		}
+		$due = self::due_date($pEnd);
+		$amount = self::resolve_amount($contract_id);
+	
+		self::upsert([
+		  'contract_id' => $contract_id,
+		  'cliente_id'  => (int) get_field('cliente', $contract_id),
+		  'servizio_id' => (int) get_field('servizio', $contract_id),
+		  'cadence'     => $cadence,
+		  'period_start'=> $pStart->format('Y-m-d'),
+		  'period_end'  => $pEnd->format('Y-m-d'),
+		  'due_date'    => $due->format('Y-m-d'),
+		  'amount'      => (float) $amount,
+		]);
+	
+		$cursor = (clone $pEnd)->modify('+1 day');
+	  }
+	}
+	
+	/** Cancella righe ledger di un contratto in un range YYYY-MM (inclusivo). Ritorna righe cancellate. */
+	private static function delete_ledger_range_for_contract(int $contract_id, ?string $fromYm, ?string $toYm): int {
+	  global $wpdb;
+	  $t = $wpdb->prefix.'spm_billing_ledger';
+	  if (!$fromYm && !$toYm) {
+		// Cancella tutto per il contratto
+		return (int)$wpdb->query($wpdb->prepare("DELETE FROM $t WHERE contract_id=%d", $contract_id));
+	  }
+	  $tz = wp_timezone();
+	  $from = $fromYm ? self::first_day_of_ym($fromYm, $tz)->format('Y-m-d') : '0001-01-01';
+	  $to   = $toYm   ? self::last_day_of_ym($toYm,   $tz)->format('Y-m-d') : '9999-12-31';
+	  return (int)$wpdb->query($wpdb->prepare(
+		"DELETE FROM $t WHERE contract_id=%d AND period_start >= %s AND period_end <= %s",
+		$contract_id, $from, $to
+	  ));
+	}
+	
+	/** First-day helper per 'YYYY-MM' */
+	private static function first_day_of_ym(string $ym, DateTimeZone $tz): DateTime {
+	  // safe parse: 'YYYY-MM'
+	  if (!preg_match('/^\d{4}-\d{2}$/', $ym)) {
+		return new DateTime('first day of this month', $tz);
+	  }
+	  return DateTime::createFromFormat('Y-m-d', $ym.'-01', $tz)->setTime(0,0,0);
+	}
+	
+	/** Last-day helper per 'YYYY-MM' */
+	private static function last_day_of_ym(string $ym, DateTimeZone $tz): DateTime {
+	  $d = self::first_day_of_ym($ym, $tz);
+	  return $d->modify('last day of this month')->setTime(0,0,0);
+	}
+
 }
 
 /**

@@ -247,6 +247,10 @@ class SPM_Contract_Handler {
 		if (get_post_type($post_id) !== 'contratti' || self::$is_saving) {
 			return;
 		}
+		
+		if (class_exists('SPM_Billing_Manager')) {
+		  SPM_Billing_Manager::touch_contract((int)$post_id);
+		}
 
 		// Evita salvataggi "fantasma"
 		if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
@@ -271,6 +275,8 @@ class SPM_Contract_Handler {
 				'scadenza_iniziale' => get_field('data_prossima_scadenza', $post_id),
 			];
 			self::log_operazione($post_id, 'creazione', null, '', $ctx);
+			
+			
 		}
 
 		// 4) Aggiorna stato

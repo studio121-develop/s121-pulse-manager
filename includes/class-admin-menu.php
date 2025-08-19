@@ -50,6 +50,16 @@ class SPM_Admin_Menu {
 			'spm-settings',
 			['SPM_Settings_Page', 'render']
 		);
+		
+		// Sotto "Pulse Manager" → Fatture da emettere
+		add_submenu_page(
+		  's121-pulse-manager',
+		  'Fatture da emettere',
+		  '🧾 Fatture da emettere',
+		  'manage_options',
+		  'spm-billing-due',
+		  ['SPM_Billing_Manager', 'render_admin_page']
+		);
 	}
 
 	/**
@@ -79,11 +89,12 @@ class SPM_Admin_Menu {
 		// Riordina voci: Dashboard → Contratti → Clienti → Servizi → Impostazioni
 		usort($submenu['s121-pulse-manager'], function($a, $b) {
 			$order = [
-				's121-pulse-manager'        => 1,
-				'edit.php?post_type=contratti' => 2,
-				'edit.php?post_type=clienti'   => 3,
-				'edit.php?post_type=servizi'   => 4,
-				'spm-settings'                 => 99,
+				's121-pulse-manager'            => 1,
+				'edit.php?post_type=contratti'  => 2,
+				'spm-billing-due'               => 2.5, // subito dopo Contratti
+				'edit.php?post_type=clienti'    => 3,
+				'edit.php?post_type=servizi'    => 4,
+				'spm-settings'                  => 99,
 			];
 			$a_key = $a[2];
 			$b_key = $b[2];

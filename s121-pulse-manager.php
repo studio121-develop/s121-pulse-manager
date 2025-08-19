@@ -20,7 +20,7 @@ add_action('admin_enqueue_scripts', function($hook) {
     }
 });
 
-// ==========================================================
+// =================================a=========================
 // CPT & ACF
 // ==========================================================
 require_once plugin_dir_path(__FILE__) . 'post-types/clienti.php';
@@ -38,6 +38,36 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-date-helper.php';  // N
 require_once plugin_dir_path(__FILE__) . 'includes/class-contract-handler.php';  // NUOVO
 require_once plugin_dir_path(__FILE__) . 'includes/spm-list-inline-actions.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-statistics-handler.php';
+// include la classe
+require_once plugin_dir_path(__FILE__) . 'includes/class-billing-manager.php';
+
+// attivazione: crea tabella se manca
+register_activation_hook(__FILE__, function () {
+  SPM_Billing_Manager::maybe_install();
+});
+
+// init della classe (AJAX/CRON/safety)
+add_action('init', ['SPM_Billing_Manager', 'init']);
+
+// safety add-on: se la tabella non esiste ancora, creala
+add_action('admin_init', function () {
+  global $wpdb;
+  $table = $wpdb->prefix . 'spm_billing_ledger';
+  $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+  if ($exists !== $table) {
+    SPM_Billing_Manager::maybe_install();
+  }
+});
+
+// 4) (Opzionale ma consigliato) Safety: se per qualche motivo la tabella non esiste, creala.
+add_action('admin_init', function () {
+    global $wpdb;
+    $table = $wpdb->prefix . 'spm_billing_ledger';
+    $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    if ($exists !== $table) {
+        SPM_Billing_Manager::maybe_install(); // ricrea e aggiorna opzione versione
+    }
+});
 
 register_activation_hook(__FILE__, function() {
     SPM_Statistics_Handler::instance()->maybe_install();
@@ -137,5 +167,41 @@ add_action('admin_init', function () {
         $res = $handler->backfill_all($from, $to);
         wp_die('Backfill RANGE completato: ' . esc_html(json_encode($res)));
     }
+});
+
+// Admin trigger per backfill FATTURAZIONE (solo admin)
+add_action('admin_init', function () {
+    if (!current_user_can('manage_options')) return;
+    if (!isset($_GET['spm_billing_backfill'])) return;
+
+    $act   = sanitize_text_field($_GET['spm_billing_backfill']); // all | contract | range
+    $from  = isset($_GET['from']) ? sanitize_text_field($_GET['from']) : null; // 'YYYY-MM'
+    $to    = isset($_GET['to'])   ? sanitize_text_field($_GET['to'])   : null; // 'YYYY-MM'
+    $reset = isset($_GET['reset']) ? (bool)intval($_GET['reset']) : false;
+
+    if (!class_exists('SPM_Billing_Manager')) {
+        wp_die('SPM_Billing_Manager non caricato');
+    }
+
+    if ($act === 'all') {
+        $res = SPM_Billing_Manager::backfill_all($from, $to, $reset);
+        wp_die('Billing backfill ALL completato: ' . esc_html(json_encode($res)));
+    }
+
+    if ($act === 'contract') {
+        $cid = isset($_GET['cid']) ? (int) $_GET['cid'] : 0;
+        if ($cid <= 0) wp_die('CID mancante');
+        $deleted = SPM_Billing_Manager::backfill_contract($cid, $from, $to, $reset);
+        wp_die('Billing backfill contratto #'.$cid.' completato. Deleted: '.(int)$deleted);
+    }
+
+    if ($act === 'range') {
+        // Alias di ALL con from/to obbligatori
+        if (!$from || !$to) wp_die('from/to mancanti (YYYY-MM)');
+        $res = SPM_Billing_Manager::backfill_all($from, $to, $reset);
+        wp_die('Billing backfill RANGE completato: ' . esc_html(json_encode($res)));
+    }
+
+    wp_die('Azione non valida');
 });
 
