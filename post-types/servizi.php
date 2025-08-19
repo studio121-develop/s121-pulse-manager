@@ -225,23 +225,43 @@ add_action('pre_get_posts', function($q){
 		$q->set('meta_query', $mq);
 	}
 
-	// Ordinamento su click intestazione
 	$orderby = $q->get('orderby');
+
+	// Click sull'intestazione "Usato"
 	if ($orderby === 'is_servizio_usato') {
-		$q->set('meta_key', 'is_servizio_usato');
-		$q->set('orderby', 'meta_value_num');
+		// niente meta_key qui!
+		$mq = $q->get('meta_query') ?: [];
+		// Clausola nominata per ordinare i record che hanno la meta
+		$mq['usato_clause'] = [
+			'key'     => 'is_servizio_usato',
+			'compare' => 'EXISTS',
+			'type'    => 'NUMERIC',
+		];
+		$q->set('meta_query', $mq);
+
+		// Ordina prima quelli con meta (1 o 0), poi il resto
+		$q->set('orderby', ['usato_clause' => 'DESC', 'title' => 'ASC']);
+		return;
 	}
 
-	// Default: usati prima (includi anche post senza meta per evitare liste vuote)
+	// Default: usati prima, poi gli altri (inclusi senza meta)
 	if (!$orderby) {
-		$q->set('meta_key', 'is_servizio_usato');
-		$q->set('orderby', 'meta_value_num');
-		$q->set('order', 'DESC');
-		$q->set('meta_query', [
+		$mq = [
 			'relation' => 'OR',
-			['key' => 'is_servizio_usato', 'compare' => 'EXISTS'],
-			['key' => 'is_servizio_usato', 'compare' => 'NOT EXISTS'],
-		]);
+			// Clausola usata per l'ordinamento
+			'usato_clause' => [
+				'key'     => 'is_servizio_usato',
+				'compare' => 'EXISTS',
+				'type'    => 'NUMERIC',
+			],
+			// Includi anche chi non ha (ancora) la meta
+			[
+				'key'     => 'is_servizio_usato',
+				'compare' => 'NOT EXISTS',
+			],
+		];
+		$q->set('meta_query', $mq);
+		$q->set('orderby', ['usato_clause' => 'DESC', 'title' => 'ASC']);
 	}
 });
 

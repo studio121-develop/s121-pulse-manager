@@ -28,6 +28,12 @@ final class SPM_Statistics_Handler {
 
 		// Al tuo cron giornaliero, dopo i tuoi check/rinnovi (tu registri spm_daily_check): noi in coda
 		add_action('spm_daily_check', [$this, 'hook_on_daily_check'], 50);
+		
+		// AGGIUNGI QUESTO:
+		add_action('wp_trash_post',  [$this, 'on_trash_contract']);   // quando va nel cestino
+		add_action('untrash_post',   [$this, 'on_untrash_contract']); // quando viene ripristinato
+		add_action('before_delete_post', [$this, 'on_delete_contract']); // già presente: delete definitivo
+
 	}
 
 	/* =======================
@@ -79,12 +85,36 @@ final class SPM_Statistics_Handler {
 	 * ======================= */
 
 	/** Dopo il salvataggio ACF di un CONTRATTO materializza il mese corrente */
+	// public function hook_on_contract_save($post_id) {
+	// 	if (get_post_type($post_id) !== 'contratti') return;
+	// 	if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return; 
+	// 	$yyyymm = current_time('Y-m');
+	// 	$this->materialize_month((int)$post_id, $yyyymm);
+	// }
+	
 	public function hook_on_contract_save($post_id) {
 		if (get_post_type($post_id) !== 'contratti') return;
 		if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
-
-		$yyyymm = current_time('Y-m');
-		$this->materialize_month((int)$post_id, $yyyymm);
+	
+		global $wpdb;
+		$cur = current_time('Y-m');
+	
+		// C'è già history per questo contratto?
+		$has_history = (int)$wpdb->get_var($wpdb->prepare(
+			"SELECT COUNT(*) FROM {$this->history_table} WHERE contract_id = %d",
+			$post_id
+		));
+	
+		// Mese di partenza dedotto dai meta (data_attivazione o post_date)
+		$start = $this->detect_start_month((int)$post_id);
+	
+		if (!$has_history && $start && strcmp($start, $cur) < 0) {
+			// Primo salvataggio di un contratto nato mesi fa → riempi tutto fino ad oggi
+			$this->backfill_contract((int)$post_id, $start, $cur);
+		} else {
+			// Aggiorna solo il mese corrente (idempotente)
+			$this->materialize_month((int)$post_id, $cur);
+		}
 	}
 
 	/** Al cron giornaliero del tuo plugin (dopo i rinnovi/scadenze) garantiamo il mese per tutti gli attivi */
@@ -429,7 +459,55 @@ final class SPM_Statistics_Handler {
 		}
 		return $out;
 	}
-
+	
+	public function delete_contract_history(int $contract_id): void {
+		global $wpdb;
+		$wpdb->delete($this->history_table, ['contract_id' => $contract_id], ['%d']);
+	}
+	
+	public function purge_deleted_contracts_and_rebuild_kpis() {
+		$this->purge_deleted_contracts();
+		$this->rebuild_kpis_range('2020-01', current_time('Y-m'));
+	}
+	
+	public function on_delete_contract($post_id){
+		if (get_post_type($post_id) !== 'contratti') return;
+		$this->delete_contract_history((int)$post_id);
+		// Ricostruisci i KPI su una finestra ragionevole
+		$this->rebuild_kpis_range('2020-01', current_time('Y-m'));
+	}
+	
+	public function on_trash_contract($post_id){
+		if (get_post_type($post_id) !== 'contratti') return;
+		$this->delete_contract_history((int)$post_id);
+		$this->rebuild_kpis_range('2020-01', current_time('Y-m'));
+	}
+	
+	public function on_untrash_contract($post_id){
+		if (get_post_type($post_id) !== 'contratti') return;
+		// Ricostruisci lo storico dal mese di attivazione ad oggi
+		$this->backfill_contract((int)$post_id, null, current_time('Y-m'));
+	}
+	
+	private function purge_deleted_contracts(): int {
+		global $wpdb;
+	
+		// Trova contract_id presenti nella history che non esistono più in wp_posts
+		$ids = $wpdb->get_col("
+			SELECT DISTINCT h.contract_id
+			FROM {$this->history_table} h
+			LEFT JOIN {$wpdb->posts} p
+			  ON p.ID = h.contract_id AND p.post_type = 'contratti'
+			WHERE p.ID IS NULL
+		");
+	
+		if (empty($ids)) return 0;
+	
+		$in = implode(',', array_map('intval', $ids));
+		$wpdb->query("DELETE FROM {$this->history_table} WHERE contract_id IN ($in)");
+		return count($ids);
+	}
+	
 }
 
 // Bootstrap

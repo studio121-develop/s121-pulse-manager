@@ -35,10 +35,28 @@ class SPM_Contract_Handler {
 	 * Aggiorna la riga storico del mese corrente e il KPI per il mese (idempotente).
 	 * Chiama SPM_Statistics_Handler solo se presente.
 	 */
+	// private static function stats_touch_month(int $post_id, ?string $yyyymm = null) : void {
+	// 	if (!class_exists('SPM_Statistics_Handler')) return;
+	// 	$ym = $yyyymm ?: current_time('Y-m');
+	// 	SPM_Statistics_Handler::instance()->materialize_month($post_id, $ym);
+	// }
+	// 
 	private static function stats_touch_month(int $post_id, ?string $yyyymm = null) : void {
 		if (!class_exists('SPM_Statistics_Handler')) return;
+	
 		$ym = $yyyymm ?: current_time('Y-m');
-		SPM_Statistics_Handler::instance()->materialize_month($post_id, $ym);
+	
+		// Esegui backfill completo solo la prima volta per questo contratto
+		$already = get_post_meta($post_id, '_spm_stats_backfilled', true);
+	
+		if (!$already) {
+			// backfill_contract deduce da sola data_attivazione/post_date e ferma a oggi
+			SPM_Statistics_Handler::instance()->backfill_contract((int)$post_id, null, null);
+			update_post_meta($post_id, '_spm_stats_backfilled', 1);
+		} else {
+			// normale materializzazione del mese corrente
+			SPM_Statistics_Handler::instance()->materialize_month((int)$post_id, $ym);
+		}
 	}
 
 	/**
