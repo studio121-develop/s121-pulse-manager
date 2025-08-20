@@ -38,6 +38,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-date-helper.php';  // N
 require_once plugin_dir_path(__FILE__) . 'includes/class-contract-handler.php';  // NUOVO
 require_once plugin_dir_path(__FILE__) . 'includes/spm-list-inline-actions.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-statistics-handler.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-about-page.php';
 // include la classe
 require_once plugin_dir_path(__FILE__) . 'includes/class-billing-manager.php';
 

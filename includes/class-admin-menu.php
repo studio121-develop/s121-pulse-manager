@@ -60,6 +60,16 @@ class SPM_Admin_Menu {
 		  'spm-billing-due',
 		  ['SPM_Billing_Manager', 'render_admin_page']
 		);
+		
+		// About / Informazioni
+		add_submenu_page(
+			's121-pulse-manager',
+			'Informazioni su Pulse Manager',
+			'ℹ️ About',
+			'manage_options',
+			'spm-about',
+			['SPM_About_Page', 'render'] // callback definita nella classe sotto
+		);
 	}
 
 	/**
