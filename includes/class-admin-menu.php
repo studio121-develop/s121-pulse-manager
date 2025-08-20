@@ -54,8 +54,8 @@ class SPM_Admin_Menu {
 		// Sotto "Pulse Manager" → Fatture da emettere
 		add_submenu_page(
 		  's121-pulse-manager',
-		  'Fatture da emettere',
-		  '🧾 Fatture da emettere',
+		  'Fatturazione',                 // page title
+			'📑 Fatturazione',              // voce menu
 		  'manage_options',
 		  'spm-billing-due',
 		  ['SPM_Billing_Manager', 'render_admin_page']

@@ -21,6 +21,15 @@ class SPM_Billing_Manager {
 	add_action('spm_daily_check', [__CLASS__, 'daily_materialize']);
 	// Safety net: se l'installazione è saltata, prova a installare
 	add_action('plugins_loaded', [__CLASS__, 'maybe_install']);
+	
+	
+	// AJAX delete singola riga
+	add_action('wp_ajax_spm_billing_delete', [__CLASS__, 'ajax_delete']);
+	
+	// Hook su trash/delete/untrash contratti
+	add_action('before_delete_post', [__CLASS__, 'on_contract_delete_or_trash']);
+	add_action('wp_trash_post',      [__CLASS__, 'on_contract_delete_or_trash']);
+	add_action('untrash_post',       [__CLASS__, 'on_contract_untrash']);
   }
 
   /** Controlla versione e (ri)crea/aggiorna tabella se serve */
@@ -409,4 +418,105 @@ class SPM_Billing_Manager {
 	$storico = array_slice($storico, 0, 50);
 	update_field('storico_contratto', $storico, $contract_id);
   }
+  
+  /** Elimina righe ledger di un contratto. Se $only_due=true elimina solo 'due', altrimenti TUTTI gli stati. */
+  public static function delete_by_contract(int $contract_id, bool $only_due = true): int {
+	global $wpdb;
+	$t = $wpdb->prefix . 'spm_billing_ledger';
+	if ($only_due) {
+	  return (int) $wpdb->query($wpdb->prepare("DELETE FROM $t WHERE contract_id=%d AND status='due'", $contract_id));
+	}
+	return (int) $wpdb->query($wpdb->prepare("DELETE FROM $t WHERE contract_id=%d", $contract_id));
+  }
+  
+  /** Quando un contratto va nel cestino o viene eliminato: puliamo le 'due' (da emettere). */
+  public static function on_contract_delete_or_trash($post_id) {
+	if (get_post_type($post_id) !== 'contratti') return;
+	self::delete_by_contract((int)$post_id, true); // solo 'due'
+  }
+  
+  /** Quando un contratto viene ripristinato: rimaterializziamo le righe future. */
+  public static function on_contract_untrash($post_id) {
+	if (get_post_type($post_id) !== 'contratti') return;
+	self::touch_contract((int)$post_id);
+  }
+  
+  /** AJAX: elimina una riga ledger a prescindere dallo stato; logga sul contratto. */
+  public static function ajax_delete() {
+	check_ajax_referer('spm_billing_delete');
+	if (!current_user_can('manage_options')) {
+	  wp_send_json_error(['message' => 'Non autorizzato'], 403);
+	}
+  
+	$id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
+	$reason = sanitize_textarea_field($_POST['reason'] ?? '');
+  
+	if ($id <= 0) wp_send_json_error(['message' => 'ID non valido'], 400);
+  
+	global $wpdb;
+	$t = $wpdb->prefix . 'spm_billing_ledger';
+	$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t WHERE id=%d", $id), ARRAY_A);
+	if (!$row) wp_send_json_error(['message' => 'Record non trovato'], 404);
+  
+	// Log prima di cancellare
+	self::append_contract_log_delete(
+	  (int)$row['contract_id'],
+	  (string)$row['status'],
+	  (string)$row['period_start'],
+	  (string)$row['period_end'],
+	  $reason
+	);
+  
+	$ok = $wpdb->delete($t, ['id' => $id], ['%d']);
+	if ($ok === false) wp_send_json_error(['message' => 'Delete fallito'], 500);
+  
+	wp_send_json_success(['message' => 'Eliminato']);
+  }
+/** Logga una cancellazione di riga billing sullo storico del contratto */
+  private static function append_contract_log_delete(int $contract_id, string $status, string $pStart, string $pEnd, string $reason=''): void {
+	$storico = get_field('storico_contratto', $contract_id) ?: [];
+  
+	$current_user = wp_get_current_user();
+	$utente = $current_user && $current_user->display_name ? $current_user->display_name : 'Sistema';
+  
+				
+	$label = self::status_label($status);
+	$note  = 'Riga fatturazione ELIMINATA (stato: ' . $label . ') per periodo '
+		   . SPM_Date_Helper::to_display_format($pStart) . ' → '
+		   . SPM_Date_Helper::to_display_format($pEnd);
+	if ($reason !== '') $note .= ' (motivo: ' . $reason . ')';
+
+  
+	// Importo robusto
+	$importo = get_field('prezzo_contratto', $contract_id);
+	if ($importo === '' || $importo === null) {
+	  $servizio_id = get_field('servizio', $contract_id);
+	  $val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
+	  $importo = ($val !== '' && $val !== null) ? $val : 0;
+	}
+  
+	$entry = [
+	  'data_operazione' => wp_date('Y-m-d'),
+	  'ora_operazione'  => wp_date('H:i'),
+	  'tipo_operazione' => 'modifica',
+	  'importo'         => (float)$importo,
+	  'utente'          => $utente,
+	  'note'            => $note,
+	];
+  
+	array_unshift($storico, $entry);
+	$storico = array_slice($storico, 0, 50);
+	update_field('storico_contratto', $storico, $contract_id);
+  }
+  
+  /** Etichetta italiana per lo stato del ledger */
+  public static function status_label(string $status): string {
+	$map = [
+	  'due'     => 'Da emettere',
+	  'issued'  => 'Emessa',
+	  'skipped' => 'Saltata',
+	];
+	return $map[$status] ?? ucfirst($status);
+  }
+
 }
