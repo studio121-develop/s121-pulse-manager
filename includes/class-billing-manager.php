@@ -1,9 +1,6 @@
 <?php
 /**
- * SPM_Billing_Manager (MVP emissione)
- * - Genera periodi di fatturazione per contratto in una tabella ledger
- * - Stati: due | issued | skipped (con motivo)
- * - Espone render_admin_page() ma NON registra il menu (lo fa SPM_Admin_Menu)
+ * SPM_Billing_Manager (MVP emissione) — WP-timezone safe
  */
 
 defined('ABSPATH') || exit;
@@ -16,16 +13,15 @@ class SPM_Billing_Manager {
 
   public static function init() {
 	// AJAX
-	add_action('wp_ajax_spm_billing_mark', [__CLASS__, 'ajax_mark']);
+	add_action('wp_ajax_spm_billing_mark',   [__CLASS__, 'ajax_mark']);
+	add_action('wp_ajax_spm_billing_delete', [__CLASS__, 'ajax_delete']);
+
 	// Materializzazione quotidiana (riuso del tuo cron)
 	add_action('spm_daily_check', [__CLASS__, 'daily_materialize']);
-	// Safety net: se l'installazione è saltata, prova a installare
+
+	// Safety net: installazione schema
 	add_action('plugins_loaded', [__CLASS__, 'maybe_install']);
-	
-	
-	// AJAX delete singola riga
-	add_action('wp_ajax_spm_billing_delete', [__CLASS__, 'ajax_delete']);
-	
+
 	// Hook su trash/delete/untrash contratti
 	add_action('before_delete_post', [__CLASS__, 'on_contract_delete_or_trash']);
 	add_action('wp_trash_post',      [__CLASS__, 'on_contract_delete_or_trash']);
@@ -71,7 +67,6 @@ class SPM_Billing_Manager {
 
   /* ===================== SETTINGS MVP ===================== */
 
-  /** Giorni di “grace” dopo EOM per emettere (default 5) */
   private static function grace_days(): int {
 	if (class_exists('SPM_Settings_Page')) {
 	  $v = (int) SPM_Settings_Page::get('billing_grace_days');
@@ -80,7 +75,6 @@ class SPM_Billing_Manager {
 	return 5;
   }
 
-  /** Giorni PRIMA della fine mese per segnalare (default 10) */
   private static function notice_days_before_eom(): int {
 	if (class_exists('SPM_Settings_Page')) {
 	  $v = (int) SPM_Settings_Page::get('billing_notice_days_before_eom');
@@ -89,7 +83,6 @@ class SPM_Billing_Manager {
 	return 10;
   }
 
-  /** Orizzonte mesi in avanti da materializzare (default 3) */
   private static function horizon_months(): int {
 	if (class_exists('SPM_Settings_Page')) {
 	  $v = (int) SPM_Settings_Page::get('billing_horizon_months');
@@ -98,9 +91,44 @@ class SPM_Billing_Manager {
 	return 3;
   }
 
+  /* ===================== HELPERS TEMPO (WP-safe) ===================== */
+
+  /** Timezone di WordPress */
+  private static function tz(): DateTimeZone {
+	return wp_timezone();
+  }
+
+  /** Ora corrente secondo WP come DateTimeImmutable */
+  private static function now(): DateTimeImmutable {
+	$ts = (int) current_time('timestamp');       // WP time
+	$dt = new DateTimeImmutable('@' . $ts);      // UTC
+	return $dt->setTimezone(self::tz());         // nel TZ WP
+  }
+
+  /** Oggi alle 00:00 nel timezone WP */
+  private static function today_start(): DateTimeImmutable {
+	$now = self::now();
+	return $now->setTime(0,0,0);
+  }
+
+  /** Inizio mese della data passata (00:00) */
+  private static function month_start(DateTimeInterface $ref): DateTimeImmutable {
+	return (new DateTimeImmutable($ref->format('Y-m-01'), self::tz()))->setTime(0,0,0);
+  }
+
+  /** Fine mese (ultimo giorno 00:00) — end “inclusivo” lo gestiamo a livello di logica */
+  private static function month_end(DateTimeInterface $ref): DateTimeImmutable {
+	return self::month_start($ref)->modify('last day of this month')->setTime(0,0,0);
+  }
+
+  /** Crea una DateTimeImmutable da 'Y-m-d' rispettando il TZ WP */
+  private static function from_db_date(string $ymd): ?DateTimeImmutable {
+	$dt = DateTimeImmutable::createFromFormat('Y-m-d', $ymd, self::tz());
+	return $dt ?: null;
+  }
+
   /* ===================== API PUBBLICHE ===================== */
 
-  /** Richiamala quando salvi/riattivi un contratto */
   public static function touch_contract(int $contract_id): void {
 	self::materialize_for($contract_id);
   }
@@ -139,19 +167,18 @@ class SPM_Billing_Manager {
 	$start_db = SPM_Date_Helper::to_db_format($attivazione);
 	if (!$start_db) return;
 
-	$tz = wp_timezone();
-	$cursor = new DateTime($start_db, $tz);
-	$cursor->modify('first day of this month')->setTime(0,0,0);
+	$start = self::from_db_date($start_db);
+	if (!$start) return;
+
+	// Cursor all'inizio mese di attivazione
+	$cursor = self::month_start($start);
 
 	// Limite = fine mese corrente + orizzonte
-	$end_limit = (new DateTime('today', $tz))
-	  ->modify('last day of this month')
-	  ->modify('+' . self::horizon_months() . ' months')
-	  ->setTime(0,0,0);
+	$end_limit = self::month_end(self::now())->modify('+' . self::horizon_months() . ' months');
 
 	while ($cursor <= $end_limit) {
 	  [$pStart, $pEnd] = self::period_bounds($cursor, $cadence);
-	  $due = self::due_date($pEnd);
+	  $due    = self::due_date($pEnd);
 	  $amount = self::resolve_amount($contract_id);
 
 	  self::upsert([
@@ -166,7 +193,7 @@ class SPM_Billing_Manager {
 	  ]);
 
 	  // Avanza al periodo successivo (giorno dopo la fine)
-	  $cursor = (clone $pEnd)->modify('+1 day');
+	  $cursor = $pEnd->modify('+1 day');
 	}
   }
 
@@ -179,9 +206,9 @@ class SPM_Billing_Manager {
 	return (float)($base ?: 0);
   }
 
-  /** Bordi del periodo su mesi naturali, in base alla cadenza */
-  private static function period_bounds(DateTime $anchor, string $cadence): array {
-	$start = (clone $anchor)->modify('first day of this month')->setTime(0,0,0);
+  /** Bordi del periodo su mesi naturali, in base alla cadenza (immutabile) */
+  private static function period_bounds(DateTimeInterface $anchor, string $cadence): array {
+	$start = self::month_start($anchor);
 	switch ($cadence) {
 	  case 'bimestrale':     $len = '+2 months'; break;
 	  case 'trimestrale':    $len = '+3 months'; break;
@@ -191,20 +218,20 @@ class SPM_Billing_Manager {
 	  case 'mensile':
 	  default:               $len = '+1 month'; break;
 	}
-	$end = (clone $start)->modify($len)->modify('-1 day');
+	$end = $start->modify($len)->modify('-1 day');
 	return [$start, $end];
   }
 
   /** Fatturazione posticipata: fine periodo + grace_days */
-  private static function due_date(DateTime $period_end): DateTime {
-	return (clone $period_end)->modify('+' . self::grace_days() . ' days');
+  private static function due_date(DateTimeInterface $period_end): DateTimeImmutable {
+	return (new DateTimeImmutable($period_end->format('Y-m-d'), self::tz()))->modify('+' . self::grace_days() . ' days');
   }
 
-  /** UPSERT idempotente (mantiene status esistente) */
+  /** UPSERT idempotente (mantiene status/notes esistenti) */
   private static function upsert(array $row): void {
 	global $wpdb;
 	$t = $wpdb->prefix . 'spm_billing_ledger';
-	$now = current_time('mysql');
+	$nowMysql = current_time('mysql'); // WP time
 
 	// ON DUPLICATE: aggiorno metadati ma NON tocco status/notes
 	$wpdb->query($wpdb->prepare(
@@ -219,13 +246,12 @@ class SPM_Billing_Manager {
 		 amount     = VALUES(amount),
 		 updated_at = VALUES(updated_at)",
 	  $row['contract_id'], $row['cliente_id'], $row['servizio_id'], $row['cadence'],
-	  $row['period_start'], $row['period_end'], $row['due_date'], $row['amount'], $now, $now
+	  $row['period_start'], $row['period_end'], $row['due_date'], $row['amount'], $nowMysql, $nowMysql
 	));
   }
 
   /* ===================== BACKFILL API ===================== */
 
-  /** Backfill di TUTTI i contratti non cessati. */
   public static function backfill_all(?string $fromYm = null, ?string $toYm = null, bool $reset = false): array {
 	$q = new WP_Query([
 	  'post_type' => 'contratti',
@@ -248,7 +274,6 @@ class SPM_Billing_Manager {
 	return ['processed' => (int)$q->found_posts, 'deleted' => $deleted];
   }
 
-  /** Backfill di un singolo contratto. */
   public static function backfill_contract(int $contract_id, ?string $fromYm = null, ?string $toYm = null, bool $reset = false): int {
 	$deleted = 0;
 	if ($reset) $deleted = self::delete_ledger_range_for_contract($contract_id, $fromYm, $toYm);
@@ -256,7 +281,7 @@ class SPM_Billing_Manager {
 	return $deleted;
   }
 
-  /** Materializza righe limitando a un range YYYY-MM se passato. */
+  /** Materializza righe limitando a un range YYYY-MM (inclusivo). */
   private static function materialize_for_range(int $contract_id, ?string $fromYm, ?string $toYm): void {
 	$stato = get_field('stato', $contract_id);
 	if ($stato === 'cessato') return;
@@ -268,28 +293,29 @@ class SPM_Billing_Manager {
 	$start_db = SPM_Date_Helper::to_db_format($attivazione);
 	if (!$start_db) return;
 
-	$tz = wp_timezone();
+	$start = self::from_db_date($start_db);
+	if (!$start) return;
 
-	// Limiti default
-	$defaultStart = (new DateTime($start_db, $tz))->modify('first day of this month')->setTime(0,0,0);
-	$defaultEnd   = (new DateTime('today', $tz))->modify('last day of this month')->modify('+'.self::horizon_months().' months')->setTime(0,0,0);
+	// Limiti default (basati su WP-now)
+	$defaultStart = self::month_start($start);
+	$defaultEnd   = self::month_end(self::now())->modify('+' . self::horizon_months() . ' months');
 
-	// Limiti range
-	$rangeStart = $fromYm ? self::first_day_of_ym($fromYm, $tz) : $defaultStart;
-	$rangeEnd   = $toYm   ? self::last_day_of_ym($toYm,   $tz) : $defaultEnd;
+	// Limiti range parametrici
+	$rangeStart = $fromYm ? self::first_day_of_ym($fromYm) : $defaultStart;
+	$rangeEnd   = $toYm   ? self::last_day_of_ym($toYm)   : $defaultEnd;
 
 	// Non andare prima dell'attivazione
 	if ($defaultStart > $rangeStart) $rangeStart = $defaultStart;
 
 	// Cursor
-	$cursor = (clone $rangeStart)->modify('first day of this month')->setTime(0,0,0);
+	$cursor = self::month_start($rangeStart);
 
 	while ($cursor <= $rangeEnd) {
 	  [$pStart, $pEnd] = self::period_bounds($cursor, $cadence);
 	  if ($pStart > $rangeEnd) break;
-	  if ($pEnd   < $rangeStart) { $cursor = (clone $pEnd)->modify('+1 day'); continue; }
+	  if ($pEnd   < $rangeStart) { $cursor = $pEnd->modify('+1 day'); continue; }
 
-	  $due = self::due_date($pEnd);
+	  $due    = self::due_date($pEnd);
 	  $amount = self::resolve_amount($contract_id);
 
 	  self::upsert([
@@ -303,7 +329,7 @@ class SPM_Billing_Manager {
 		'amount'      => (float) $amount,
 	  ]);
 
-	  $cursor = (clone $pEnd)->modify('+1 day');
+	  $cursor = $pEnd->modify('+1 day');
 	}
   }
 
@@ -314,31 +340,30 @@ class SPM_Billing_Manager {
 	if (!$fromYm && !$toYm) {
 	  return (int)$wpdb->query($wpdb->prepare("DELETE FROM $t WHERE contract_id=%d", $contract_id));
 	}
-	$tz = wp_timezone();
-	$from = $fromYm ? self::first_day_of_ym($fromYm, $tz)->format('Y-m-d') : '0001-01-01';
-	$to   = $toYm   ? self::last_day_of_ym($toYm,   $tz)->format('Y-m-d') : '9999-12-31';
+	$from = $fromYm ? self::first_day_of_ym($fromYm)->format('Y-m-d') : '0001-01-01';
+	$to   = $toYm   ? self::last_day_of_ym($toYm)->format('Y-m-d')   : '9999-12-31';
 	return (int)$wpdb->query($wpdb->prepare(
 	  "DELETE FROM $t WHERE contract_id=%d AND period_start >= %s AND period_end <= %s",
 	  $contract_id, $from, $to
 	));
   }
 
-  /** First-day helper per 'YYYY-MM' */
-  private static function first_day_of_ym(string $ym, DateTimeZone $tz): DateTime {
+  /** First-day helper per 'YYYY-MM' nel TZ WP */
+  private static function first_day_of_ym(string $ym): DateTimeImmutable {
 	if (!preg_match('/^\d{4}-\d{2}$/', $ym)) {
-	  return new DateTime('first day of this month', $tz);
+	  return self::month_start(self::now());
 	}
-	return DateTime::createFromFormat('Y-m-d', $ym.'-01', $tz)->setTime(0,0,0);
+	$dt = DateTimeImmutable::createFromFormat('Y-m-d', $ym.'-01', self::tz());
+	return ($dt ?: self::today_start())->setTime(0,0,0);
   }
-  /** Last-day helper per 'YYYY-MM' */
-  private static function last_day_of_ym(string $ym, DateTimeZone $tz): DateTime {
-	$d = self::first_day_of_ym($ym, $tz);
-	return $d->modify('last day of this month')->setTime(0,0,0);
+
+  /** Last-day helper per 'YYYY-MM' nel TZ WP */
+  private static function last_day_of_ym(string $ym): DateTimeImmutable {
+	return self::first_day_of_ym($ym)->modify('last day of this month')->setTime(0,0,0);
   }
 
   /* ===================== ADMIN: RENDERER ===================== */
 
-  /** Rendering della pagina admin: delega al template separato */
   public static function render_admin_page() {
 	if (!current_user_can('manage_options')) return;
 	require plugin_dir_path(__FILE__) . 'class-billing-page.php';
@@ -351,8 +376,8 @@ class SPM_Billing_Manager {
 	check_ajax_referer('spm_billing_mark');
 	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Non autorizzato'], 403);
 
-	$id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
-	$to = sanitize_text_field($_POST['to'] ?? '');
+	$id     = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+	$to     = sanitize_text_field($_POST['to'] ?? '');
 	$reason = sanitize_textarea_field($_POST['reason'] ?? '');
 
 	if ($id<=0 || !in_array($to, ['issued','skipped'], true)) {
@@ -363,15 +388,15 @@ class SPM_Billing_Manager {
 	}
 
 	global $wpdb;
-	$t = $wpdb->prefix.'spm_billing_ledger';
+	$t   = $wpdb->prefix.'spm_billing_ledger';
 	$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t WHERE id=%d", $id), ARRAY_A);
 	if (!$row) wp_send_json_error(['message'=>'Record non trovato'], 404);
 	if ($row['status'] !== 'due') wp_send_json_error(['message'=>'Stato non modificabile'], 400);
 
 	$ok = $wpdb->update($t, [
-	  'status' => $to,
-	  'notes'  => $to==='skipped' ? $reason : $row['notes'],
-	  'updated_at' => current_time('mysql')
+	  'status'     => $to,
+	  'notes'      => $to==='skipped' ? $reason : $row['notes'],
+	  'updated_at' => current_time('mysql'), // WP time
 	], ['id'=>$id], ['%s','%s','%s'], ['%d']);
 
 	if ($ok===false) wp_send_json_error(['message'=>'Update fallito'], 500);
@@ -382,14 +407,13 @@ class SPM_Billing_Manager {
 	wp_send_json_success(['message'=>'OK']);
   }
 
-  /* ============== LOG CONTRATTO (senza dipendere da metodo private) ============== */
+  /* ============== LOG CONTRATTO ============== */
 
-  /** Appende una riga allo storico_contratto mimando il formato esistente */
   private static function append_contract_log(int $contract_id, string $action, string $pStart, string $pEnd, string $reason=''): void {
 	$storico = get_field('storico_contratto', $contract_id) ?: [];
 
 	$current_user = wp_get_current_user();
-	$utente = $current_user && $current_user->display_name ? $current_user->display_name : 'Sistema';
+	$utente = ($current_user && $current_user->display_name) ? $current_user->display_name : 'Sistema';
 
 	if ($action === 'issued') {
 	  $note = 'Fattura EMESSA per periodo ' . SPM_Date_Helper::to_display_format($pStart) . ' → ' . SPM_Date_Helper::to_display_format($pEnd);
@@ -418,7 +442,54 @@ class SPM_Billing_Manager {
 	$storico = array_slice($storico, 0, 50);
 	update_field('storico_contratto', $storico, $contract_id);
   }
-  
+
+  /** Log cancellazione riga billing */
+  private static function append_contract_log_delete(int $contract_id, string $status, string $pStart, string $pEnd, string $reason=''): void {
+	$storico = get_field('storico_contratto', $contract_id) ?: [];
+
+	$current_user = wp_get_current_user();
+	$utente = ($current_user && $current_user->display_name) ? $current_user->display_name : 'Sistema';
+
+	$label = self::status_label($status);
+	$note  = 'Riga fatturazione ELIMINATA (stato: ' . $label . ') per periodo '
+		   . SPM_Date_Helper::to_display_format($pStart) . ' → '
+		   . SPM_Date_Helper::to_display_format($pEnd);
+	if ($reason !== '') $note .= ' (motivo: ' . $reason . ')';
+
+	// Importo robusto
+	$importo = get_field('prezzo_contratto', $contract_id);
+	if ($importo === '' || $importo === null) {
+	  $servizio_id = get_field('servizio', $contract_id);
+	  $val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
+	  $importo = ($val !== '' && $val !== null) ? $val : 0;
+	}
+
+	$entry = [
+	  'data_operazione' => wp_date('Y-m-d'),
+	  'ora_operazione'  => wp_date('H:i'),
+	  'tipo_operazione' => 'modifica',
+	  'importo'         => (float)$importo,
+	  'utente'          => $utente,
+	  'note'            => $note,
+	];
+
+	array_unshift($storico, $entry);
+	$storico = array_slice($storico, 0, 50);
+	update_field('storico_contratto', $storico, $contract_id);
+  }
+
+  /** Etichetta italiana per lo stato del ledger */
+  public static function status_label(string $status): string {
+	$map = [
+	  'due'     => 'Da emettere',
+	  'issued'  => 'Emessa',
+	  'skipped' => 'Saltata',
+	];
+	return $map[$status] ?? ucfirst($status);
+  }
+
+  /* ===================== HOOKS DI PULIZIA ===================== */
+
   /** Elimina righe ledger di un contratto. Se $only_due=true elimina solo 'due', altrimenti TUTTI gli stati. */
   public static function delete_by_contract(int $contract_id, bool $only_due = true): int {
 	global $wpdb;
@@ -428,95 +499,17 @@ class SPM_Billing_Manager {
 	}
 	return (int) $wpdb->query($wpdb->prepare("DELETE FROM $t WHERE contract_id=%d", $contract_id));
   }
-  
+
   /** Quando un contratto va nel cestino o viene eliminato: puliamo le 'due' (da emettere). */
   public static function on_contract_delete_or_trash($post_id) {
 	if (get_post_type($post_id) !== 'contratti') return;
 	self::delete_by_contract((int)$post_id, true); // solo 'due'
   }
-  
+
   /** Quando un contratto viene ripristinato: rimaterializziamo le righe future. */
   public static function on_contract_untrash($post_id) {
 	if (get_post_type($post_id) !== 'contratti') return;
 	self::touch_contract((int)$post_id);
-  }
-  
-  /** AJAX: elimina una riga ledger a prescindere dallo stato; logga sul contratto. */
-  public static function ajax_delete() {
-	check_ajax_referer('spm_billing_delete');
-	if (!current_user_can('manage_options')) {
-	  wp_send_json_error(['message' => 'Non autorizzato'], 403);
-	}
-  
-	$id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
-	$reason = sanitize_textarea_field($_POST['reason'] ?? '');
-  
-	if ($id <= 0) wp_send_json_error(['message' => 'ID non valido'], 400);
-  
-	global $wpdb;
-	$t = $wpdb->prefix . 'spm_billing_ledger';
-	$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t WHERE id=%d", $id), ARRAY_A);
-	if (!$row) wp_send_json_error(['message' => 'Record non trovato'], 404);
-  
-	// Log prima di cancellare
-	self::append_contract_log_delete(
-	  (int)$row['contract_id'],
-	  (string)$row['status'],
-	  (string)$row['period_start'],
-	  (string)$row['period_end'],
-	  $reason
-	);
-  
-	$ok = $wpdb->delete($t, ['id' => $id], ['%d']);
-	if ($ok === false) wp_send_json_error(['message' => 'Delete fallito'], 500);
-  
-	wp_send_json_success(['message' => 'Eliminato']);
-  }
-/** Logga una cancellazione di riga billing sullo storico del contratto */
-  private static function append_contract_log_delete(int $contract_id, string $status, string $pStart, string $pEnd, string $reason=''): void {
-	$storico = get_field('storico_contratto', $contract_id) ?: [];
-  
-	$current_user = wp_get_current_user();
-	$utente = $current_user && $current_user->display_name ? $current_user->display_name : 'Sistema';
-  
-				
-	$label = self::status_label($status);
-	$note  = 'Riga fatturazione ELIMINATA (stato: ' . $label . ') per periodo '
-		   . SPM_Date_Helper::to_display_format($pStart) . ' → '
-		   . SPM_Date_Helper::to_display_format($pEnd);
-	if ($reason !== '') $note .= ' (motivo: ' . $reason . ')';
-
-  
-	// Importo robusto
-	$importo = get_field('prezzo_contratto', $contract_id);
-	if ($importo === '' || $importo === null) {
-	  $servizio_id = get_field('servizio', $contract_id);
-	  $val = $servizio_id ? get_field('prezzo_base', $servizio_id) : null;
-	  $importo = ($val !== '' && $val !== null) ? $val : 0;
-	}
-  
-	$entry = [
-	  'data_operazione' => wp_date('Y-m-d'),
-	  'ora_operazione'  => wp_date('H:i'),
-	  'tipo_operazione' => 'modifica',
-	  'importo'         => (float)$importo,
-	  'utente'          => $utente,
-	  'note'            => $note,
-	];
-  
-	array_unshift($storico, $entry);
-	$storico = array_slice($storico, 0, 50);
-	update_field('storico_contratto', $storico, $contract_id);
-  }
-  
-  /** Etichetta italiana per lo stato del ledger */
-  public static function status_label(string $status): string {
-	$map = [
-	  'due'     => 'Da emettere',
-	  'issued'  => 'Emessa',
-	  'skipped' => 'Saltata',
-	];
-	return $map[$status] ?? ucfirst($status);
   }
 
 }
