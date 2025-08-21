@@ -206,3 +206,200 @@ add_action('admin_init', function () {
     wp_die('Azione non valida');
 });
 
+// Override Bacheca nativa → destinazione configurata
+add_action('load-index.php', function () {
+    if (!is_user_logged_in()) return;
+
+    // Non toccare AJAX o REST
+    if ((defined('DOING_AJAX') && DOING_AJAX) || (defined('REST_REQUEST') && REST_REQUEST)) return;
+
+    // Leggi opzioni + fallback ai default
+    $opts = get_option(SPM_Settings_Page::OPTION_NAME, SPM_Settings_Page::defaults());
+    $opts = wp_parse_args($opts, SPM_Settings_Page::defaults());
+
+    // Attivo?
+    if (empty($opts['override_dashboard_enabled'])) return;
+
+    // Bypass admin?
+    if (!empty($opts['override_dashboard_bypass_admin']) && current_user_can('manage_options')) return;
+
+    // Se impostato per ruoli specifici, filtra
+    $roles_limit = isset($opts['override_dashboard_roles']) && is_array($opts['override_dashboard_roles']) ? $opts['override_dashboard_roles'] : [];
+    if ($roles_limit) {
+        $user = wp_get_current_user();
+        if (!array_intersect($roles_limit, (array)$user->roles)) return;
+    }
+
+    // Calcola destinazione
+    $target = trim((string)$opts['override_dashboard_target']);
+    if ($target === '') return;
+
+    if (preg_match('~^https?://~i', $target)) {
+        $dest = $target; // URL assoluto
+    } else {
+        // slug o path admin
+        if (strpos($target, 'admin.php?page=') === 0 || strpos($target, '.php') !== false || strpos($target, '=') !== false) {
+            $dest = admin_url($target);
+        } else {
+            $dest = admin_url('admin.php?page=' . $target); // slug semplice
+        }
+    }
+
+    // Evita loop: se già sulla destinazione, non reindirizzare
+    $current_is_target = false;
+    if (isset($_GET['page']) && strpos($dest, 'admin.php?page=') !== false) {
+        $current_is_target = (strpos($dest, 'admin.php?page=' . sanitize_key($_GET['page'])) !== false);
+    }
+    if ($current_is_target) return;
+
+    wp_safe_redirect($dest);
+    exit;
+});
+
+// Nasconde le voci selezionate (top-level o submenu) usando il registro
+add_action('admin_menu', function () {
+    if (!is_user_logged_in()) return;
+
+    $opts = get_option(SPM_Settings_Page::OPTION_NAME, SPM_Settings_Page::defaults());
+    $opts = wp_parse_args($opts, SPM_Settings_Page::defaults());
+
+    if (empty($opts['hide_menus_enabled'])) return;
+    if (!empty($opts['hide_menus_bypass_admin']) && current_user_can('manage_options')) return;
+
+    // Ruoli limitati?
+    $roles_limit = isset($opts['hide_menus_roles']) && is_array($opts['hide_menus_roles']) ? $opts['hide_menus_roles'] : [];
+    if ($roles_limit) {
+        $user = wp_get_current_user();
+        if (!array_intersect($roles_limit, (array)$user->roles)) return;
+    }
+
+    $to_hide = isset($opts['hide_menus_items']) && is_array($opts['hide_menus_items']) ? $opts['hide_menus_items'] : [];
+    if (!$to_hide) return;
+
+    $registry = get_option('spm_menu_registry');
+    $items    = (is_array($registry) && !empty($registry['items'])) ? $registry['items'] : [];
+
+    // Mappa slug -> parent (null se top-level)
+    $parent_of = [];
+    foreach ($items as $it) {
+        $parent_of[(string)$it['slug']] = $it['parent'] ? (string)$it['parent'] : null;
+    }
+
+    foreach ($to_hide as $slug) {
+        $parent = $parent_of[$slug] ?? null;
+        if ($parent) {
+            remove_submenu_page($parent, $slug);
+        } else {
+            remove_menu_page($slug);
+            // Dashboard: rimuovi anche sottovoci note
+            if ($slug === 'index.php') {
+                remove_submenu_page('index.php', 'index.php');
+                remove_submenu_page('index.php', 'update-core.php');
+            }
+        }
+
+        // ACF: compat vecchie installazioni
+        if ($slug === 'edit.php?post_type=acf-field-group') {
+            remove_menu_page('acf');
+        }
+    }
+}, 999);
+
+add_action('admin_bar_menu', function ($bar) {
+    if (!is_user_logged_in()) return;
+
+    $opts = get_option(SPM_Settings_Page::OPTION_NAME, SPM_Settings_Page::defaults());
+    $opts = wp_parse_args($opts, SPM_Settings_Page::defaults());
+
+    if (empty($opts['hide_menus_enabled'])) return;
+    if (!empty($opts['hide_menus_bypass_admin']) && current_user_can('manage_options')) return;
+
+    $roles_limit = isset($opts['hide_menus_roles']) && is_array($opts['hide_menus_roles']) ? $opts['hide_menus_roles'] : [];
+    if ($roles_limit) {
+        $user = wp_get_current_user();
+        if (!array_intersect($roles_limit, (array)$user->roles)) return;
+    }
+
+    $slugs = isset($opts['hide_menus_items']) && is_array($opts['hide_menus_items']) ? $opts['hide_menus_items'] : [];
+
+    // Commenti (icona a campanella per commenti)
+    if (in_array('edit-comments.php', $slugs, true)) {
+        $bar->remove_node('comments');
+    }
+
+    // "Nuovo" e figli (post, media, page, user, ecc.)
+    if (array_intersect($slugs, ['edit.php', 'upload.php', 'edit.php?post_type=page'])) {
+        $bar->remove_node('new-post');
+        $bar->remove_node('new-page');
+        $bar->remove_node('new-media');
+    }
+}, 999);
+// Cattura dinamica del menu admin (inclusi plugin terzi)
+add_action('admin_menu', function () {
+    if (!is_user_logged_in()) return;
+
+    // Lavora sempre con il menu completo visibile all'utente corrente
+    // (per un registro "full" assicurati che un admin esegua almeno 1 volta)
+    global $menu, $submenu;
+
+    $items = [];
+
+    // Top-level
+    if (is_array($menu)) {
+        foreach ($menu as $m) {
+            // Struttura: [0]=titolo, [1]=cap, [2]=slug, ...
+            $slug  = isset($m[2]) ? (string)$m[2] : '';
+            if ($slug === '') continue;
+
+            $title = isset($m[0]) ? wp_strip_all_tags((string)$m[0]) : $slug;
+            // rimuovi eventuali badge <span class="update-plugins">…</span>
+            $title = trim(preg_replace('~\s+~', ' ', $title));
+
+            $items[$slug] = [
+                'slug'   => $slug,
+                'title'  => $title,
+                'parent' => null,
+            ];
+
+            // Submenu di questo top-level
+            if (isset($submenu[$slug]) && is_array($submenu[$slug])) {
+                foreach ($submenu[$slug] as $sm) {
+                    // Struttura: [0]=titolo, [1]=cap, [2]=slug
+                    $s_slug  = isset($sm[2]) ? (string)$sm[2] : '';
+                    if ($s_slug === '') continue;
+
+                    $s_title = isset($sm[0]) ? wp_strip_all_tags((string)$sm[0]) : $s_slug;
+                    $s_title = trim(preg_replace('~\s+~', ' ', $s_title));
+
+                    // Evita di sovrascrivere eventuale top-level con stesso slug
+                    if (!isset($items[$s_slug])) {
+                        $items[$s_slug] = [
+                            'slug'   => $s_slug,
+                            'title'  => $s_title,
+                            'parent' => $slug,
+                        ];
+                    }
+                }
+            }
+        }
+    }
+
+    // Ordina per titolo per UI più gradevole
+    uasort($items, function ($a, $b) {
+        return strcasecmp($a['title'], $b['title']);
+    });
+
+    $registry = [
+        'items'       => array_values($items),
+        'last_update' => time(),
+        'hash'        => md5(wp_json_encode($items)),
+    ];
+
+    // Aggiorna solo se cambia per ridurre I/O DB
+    $old = get_option('spm_menu_registry');
+    if (!is_array($old) || !isset($old['hash']) || $old['hash'] !== $registry['hash']) {
+        update_option('spm_menu_registry', $registry, false);
+    }
+}, 99999);
+
+

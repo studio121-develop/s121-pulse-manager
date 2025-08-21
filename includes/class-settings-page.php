@@ -46,7 +46,22 @@ class SPM_Settings_Page {
 			'frontend_redirect_logged_in'   => 1,        // 1/0
 			'frontend_noindex'              => 1,        // 1/0
 			'frontend_static_html'          => '',       // HTML custom opzionale
+			
+			// Backend (override bacheca)
+			'override_dashboard_enabled'      => 0,                      // 1 = attivo
+			'override_dashboard_target'       => 's121-pulse-manager',   // slug o URL
+			'override_dashboard_bypass_admin' => 1,                      // non toccare gli admin
+			'override_dashboard_roles'        => [],                     // vuoto = tutti i ruoli
+			
+			// Nascondi voci di menu (backend)
+			'hide_menus_enabled'       => 0,  // ON/OFF
+			'hide_menus_items'         => [], // slugs selezionati
+			'hide_menus_bypass_admin'  => 1,  // non applicare a chi ha manage_options
+			'hide_menus_roles'         => [], // vuoto = tutti i ruoli
+
 		];
+		
+
 		
 		
 	}
@@ -133,6 +148,56 @@ class SPM_Settings_Page {
 				? (string)$in['frontend_static_html']
 				: wp_kses_post((string)$in['frontend_static_html']);
 		}
+		
+		// ===== Override Bacheca (Backend) =====
+		$out['override_dashboard_enabled']      = !empty($in['override_dashboard_enabled']) ? 1 : 0;
+		$out['override_dashboard_bypass_admin'] = !empty($in['override_dashboard_bypass_admin']) ? 1 : 0;
+		
+		// target: slug admin (es. s121-pulse-manager) oppure URL assoluto
+		$raw_target = isset($in['override_dashboard_target']) ? trim((string)$in['override_dashboard_target']) : '';
+		if ($raw_target === '') {
+			$raw_target = $out['override_dashboard_target'];
+		}
+		if (preg_match('~^https?://~i', $raw_target)) {
+			$safe = esc_url_raw($raw_target);
+			$out['override_dashboard_target'] = $safe ?: 's121-pulse-manager';
+		} else {
+			$slug = preg_replace('~[^a-z0-9\-\._\?=]~i', '', $raw_target);
+			$out['override_dashboard_target'] = $slug ?: 's121-pulse-manager';
+		}
+		
+		// ruoli limitati (opzionale)
+		$valid_roles = array_keys(get_editable_roles());
+		$roles_in = isset($in['override_dashboard_roles']) && is_array($in['override_dashboard_roles']) ? $in['override_dashboard_roles'] : [];
+		$out['override_dashboard_roles'] = array_values(array_intersect($roles_in, $valid_roles));
+		
+		// ===== Nascondi voci di menu =====
+		$out['hide_menus_enabled']      = !empty($in['hide_menus_enabled']) ? 1 : 0;
+		$out['hide_menus_bypass_admin'] = !empty($in['hide_menus_bypass_admin']) ? 1 : 0;
+		
+		// whitelist delle voci consentite
+		$allowed_menu_slugs = [
+			'index.php',                         // Bacheca
+			'edit.php',                          // Articoli
+			'upload.php',                        // Media
+			'edit.php?post_type=page',           // Pagine
+			'edit-comments.php',                 // Commenti
+			'themes.php',                        // Aspetto
+			'plugins.php',                       // Plugin
+			'users.php',                         // Utenti
+			'tools.php',                         // Strumenti
+			'options-general.php',               // Impostazioni
+			'edit.php?post_type=acf-field-group' // ACF (moderno)
+			// Nota: tenteremo anche 'acf' in rimozione per compat vecchie
+		];
+		
+		$items_in = isset($in['hide_menus_items']) && is_array($in['hide_menus_items']) ? $in['hide_menus_items'] : [];
+		$out['hide_menus_items'] = array_values(array_intersect($items_in, $allowed_menu_slugs));
+		
+		// limiti di ruolo (opzionale)
+		$valid_roles = array_keys(get_editable_roles());
+		$roles_in = isset($in['hide_menus_roles']) && is_array($in['hide_menus_roles']) ? $in['hide_menus_roles'] : [];
+		$out['hide_menus_roles'] = array_values(array_intersect($roles_in, $valid_roles));
 
 		return $out;
 	}
@@ -263,6 +328,186 @@ class SPM_Settings_Page {
 							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_static_html]"><?php
 							echo esc_textarea( (string) self::get('frontend_static_html') ); ?></textarea>
 						<span class="description" style="grid-column:2 / span 1; color:#666;">Lascia vuoto per usare il template predefinito del controller.</span>
+					</div>
+					
+					<hr style="margin:24px 0;">
+					<h2 style="margin:0 0 12px 0;">🧭 Backend – Override Bacheca</h2>
+					
+					<div style="display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:start;">
+						<label style="font-weight:600;">Attiva override</label>
+						<label>
+							<input type="checkbox" value="1"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_enabled]"
+								<?php checked((int) self::get('override_dashboard_enabled'), 1); ?> />
+							Reindirizza la bacheca nativa verso una pagina personalizzata
+						</label>
+					
+						<label for="spm_od_target" style="font-weight:600;">Destinazione</label>
+						<div>
+							<input id="spm_od_target" type="text" style="width:100%; max-width:520px;"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_target]"
+								value="<?php echo esc_attr((string) self::get('override_dashboard_target')); ?>" />
+							<p class="description" style="margin:.4em 0 0 0; color:#666;">
+								Accetta <code>slug</code> admin (es. <code>s121-pulse-manager</code>) oppure un URL assoluto (https://…).
+								Se inserisci uno slug, porterà a <code>admin.php?page=SLUG</code>.
+							</p>
+						</div>
+						
+					
+						<label style="font-weight:600;">Bypass amministratori</label>
+						<label>
+							<input type="checkbox" value="1"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_bypass_admin]"
+								<?php checked((int) self::get('override_dashboard_bypass_admin'), 1); ?> />
+							Non applicare l’override a chi ha <code>manage_options</code> (consigliato)
+						</label>
+					
+						<label for="spm_od_roles" style="font-weight:600;">Limita a ruoli (opzionale)</label>
+						<div>
+							<?php
+							$all_roles = get_editable_roles();
+							$sel = (array) self::get('override_dashboard_roles');
+							?>
+							<select id="spm_od_roles" multiple size="6" style="width:100%; max-width:320px;"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_roles][]">
+								<?php foreach ($all_roles as $role_key => $role_obj): ?>
+									<option value="<?php echo esc_attr($role_key); ?>" <?php selected(in_array($role_key, $sel, true)); ?>>
+										<?php echo esc_html($role_obj['name'] . ' (' . $role_key . ')'); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+							<p class="description" style="margin:.4em 0 0 0; color:#666;">
+								Lascia vuoto per applicare l’override a <em>tutti</em> i ruoli (al netto del bypass admin).
+							</p>
+						</div>
+					</div>
+
+<hr style="margin:24px 0;">
+					<h2 style="margin:0 0 12px 0;">🧱 Backend – Nascondi voci di menu</h2>
+					
+					<div style="display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:start;">
+						<label style="font-weight:600;">Attiva</label>
+						<label>
+							<input type="checkbox" value="1"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_enabled]"
+								<?php checked((int) self::get('hide_menus_enabled'), 1); ?> />
+							Applica le regole di nascondimento voci di menu
+						</label>
+					
+						<label style="font-weight:600;">Bypass amministratori</label>
+						<label>
+							<input type="checkbox" value="1"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_bypass_admin]"
+								<?php checked((int) self::get('hide_menus_bypass_admin'), 1); ?> />
+							Non applicare a chi ha <code>manage_options</code>
+						</label>
+					
+						<label for="spm_hide_roles" style="font-weight:600;">Limita a ruoli (opzionale)</label>
+						<div>
+							<?php $all_roles = get_editable_roles(); $sel_roles = (array) self::get('hide_menus_roles'); ?>
+							<select id="spm_hide_roles" multiple size="6" style="width:100%; max-width:320px;"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_roles][]">
+								<?php foreach ($all_roles as $role_key => $role_obj): ?>
+									<option value="<?php echo esc_attr($role_key); ?>" <?php selected(in_array($role_key, $sel_roles, true)); ?>>
+										<?php echo esc_html($role_obj['name'] . ' (' . $role_key . ')'); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+							<p class="description" style="margin:.4em 0 0 0; color:#666;">
+								Vuoto = applica a tutti (al netto del bypass admin).
+							</p>
+						</div>
+					
+						<label style="font-weight:600;">Voci da nascondere</label>
+						<label style="font-weight:600;">Voci da nascondere</label>
+						<div>
+							<?php
+							$picked   = (array) self::get('hide_menus_items');
+							$registry = get_option('spm_menu_registry');
+							$items    = (is_array($registry) && !empty($registry['items'])) ? $registry['items'] : [];
+						
+							// Fallback: se non c'è ancora registro, offri una lista minima
+							if (!$items) {
+								$items = [
+									['slug'=>'index.php','title'=>'Bacheca','parent'=>null],
+									['slug'=>'edit.php','title'=>'Articoli','parent'=>null],
+									['slug'=>'upload.php','title'=>'Media','parent'=>null],
+									['slug'=>'edit.php?post_type=page','title'=>'Pagine','parent'=>null],
+									['slug'=>'edit-comments.php','title'=>'Commenti','parent'=>null],
+									['slug'=>'themes.php','title'=>'Aspetto','parent'=>null],
+									['slug'=>'plugins.php','title'=>'Plugin','parent'=>null],
+									['slug'=>'users.php','title'=>'Utenti','parent'=>null],
+									['slug'=>'tools.php','title'=>'Strumenti','parent'=>null],
+									['slug'=>'options-general.php','title'=>'Impostazioni','parent'=>null],
+									['slug'=>'edit.php?post_type=acf-field-group','title'=>'ACF','parent'=>null],
+								];
+							}
+						
+							// Raggruppa per parent per una UX più chiara (Top-level e sotto)
+							$grouped = ['__top__' => []];
+							foreach ($items as $it) {
+								$p = $it['parent'] ? (string)$it['parent'] : '__top__';
+								if (!isset($grouped[$p])) $grouped[$p] = [];
+								$grouped[$p][] = $it;
+							}
+						
+							echo '<div style="display:flex; gap:24px; flex-wrap:wrap;">';
+						
+							// Stampa prima il top-level
+							if (!empty($grouped['__top__'])) {
+								echo '<div><h4 style="margin:6px 0;">Top-level</h4>';
+								foreach ($grouped['__top__'] as $it) {
+									$slug  = $it['slug'];
+									$title = $it['title'];
+									?>
+									<label style="display:block; margin:.2em 0;">
+										<input type="checkbox"
+											name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_items][]"
+											value="<?php echo esc_attr($slug); ?>"
+											<?php checked(in_array($slug, $picked, true)); ?> />
+										<?php echo esc_html($title); ?> <code style="opacity:.6;"><?php echo esc_html($slug); ?></code>
+									</label>
+									<?php
+								}
+								echo '</div>';
+							}
+						
+							// Poi i gruppi con parent
+							foreach ($grouped as $parent => $children) {
+								if ($parent === '__top__') continue;
+								// Trova il titolo del parent (se presente tra gli items)
+								$parent_title = $parent;
+								foreach ($items as $it) {
+									if ($it['slug'] === $parent) { $parent_title = $it['title']; break; }
+								}
+								echo '<div><h4 style="margin:6px 0;">Sottomenu di: '.esc_html($parent_title).'</h4>';
+								foreach ($children as $it) {
+									$slug  = $it['slug'];
+									$title = $it['title'];
+									?>
+									<label style="display:block; margin:.2em 0;">
+										<input type="checkbox"
+											name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_items][]"
+											value="<?php echo esc_attr($slug); ?>"
+											<?php checked(in_array($slug, $picked, true)); ?> />
+										<?php echo esc_html($title); ?> <code style="opacity:.6;"><?php echo esc_html($slug); ?></code>
+									</label>
+									<?php
+								}
+								echo '</div>';
+							}
+						
+							echo '</div>';
+						
+							// Info registro
+							if (is_array($registry) && !empty($registry['last_update'])) {
+								echo '<p class="description" style="margin:.5em 0 0 0; color:#666;">Elenco aggiornato: '
+									. esc_html(date_i18n(get_option('date_format').' '.get_option('time_format'), (int)$registry['last_update'])) . '</p>';
+							} else {
+								echo '<p class="description" style="margin:.5em 0 0 0; color:#666;">Apri questa pagina come amministratore dopo aver caricato la bacheca per popolare l’elenco completo.</p>';
+							}
+							?>
+						</div>
 					</div>
 
 	
