@@ -13,10 +13,18 @@ if (!defined('SPM_PLUGIN_FILE')) { define('SPM_PLUGIN_FILE', __FILE__);}
 if (!defined('SPM_PLUGIN_URL'))  define('SPM_PLUGIN_URL',  plugin_dir_url(__FILE__));
 if (!defined('SPM_PLUGIN_PATH')) define('SPM_PLUGIN_PATH', plugin_dir_path(__FILE__));
 
-// Carica stile admin quando si editano i post del plugin
+// Carica stile e script UI per le pagine del plugin
 add_action('admin_enqueue_scripts', function($hook) {
-    if ($hook === 'post.php' || $hook === 'post-new.php') {
-        wp_enqueue_style('spm-admin', plugin_dir_url(__FILE__) . 'assets/css/admin.css');
+    $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+    $is_spm = false;
+    if ($screen) {
+        $post_type = $screen->post_type ?? '';
+        $is_spm = strpos($hook, 's121-pulse-manager') !== false || strpos($hook, 'spm') !== false || in_array($post_type, ['contratti','servizi','clienti'], true);
+    }
+    if ($is_spm) {
+        wp_enqueue_style('spm-admin', SPM_PLUGIN_URL . 'assets/css/admin.css', [], '1.0');
+        wp_enqueue_script('spm-admin', SPM_PLUGIN_URL . 'assets/js/admin.js', [], '1.0', true);
+        add_filter('admin_body_class', function($classes){ return $classes . ' spm-admin'; });
     }
 });
 
