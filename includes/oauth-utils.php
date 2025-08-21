@@ -6,10 +6,16 @@ use FattureInCloud\Configuration;
 use GuzzleHttp\Client;
 
 function get_valid_token() {
-	$access_token  = get_option('spm_fic_access_token');
-	$refresh_token = get_option('spm_fic_refresh_token');
-	$client_id     = "APSzK7BJjV5PsKWnrHwKeV3eSU91isoh";
-	$client_secret = "5Xd9ABBPXl1577NsSqyQlDmDrVgcqSRsv9Y85h1yWSSdWwUZAdy6kTcPlpuigU2q";
+        $access_token  = get_option('spm_fic_access_token');
+        $refresh_token = get_option('spm_fic_refresh_token');
+        // Credenziali definite in wp-config.php o salvate come opzioni protette.
+        $client_id     = defined('SPM_FIC_CLIENT_ID') ? SPM_FIC_CLIENT_ID : get_option('spm_fic_client_id');
+        $client_secret = defined('SPM_FIC_CLIENT_SECRET') ? SPM_FIC_CLIENT_SECRET : get_option('spm_fic_client_secret');
+
+        if (!$client_id || !$client_secret) {
+                error_log('[S121 OAuth] ❌ Client ID/Secret non configurati.');
+                return false;
+        }
 
 	$config = Configuration::getDefaultConfiguration()->setAccessToken($access_token);
 	$testApi = new UserApi(new Client(), $config);

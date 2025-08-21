@@ -196,11 +196,21 @@ s121-pulse-manager/
 
 | Chiave Opzione | Descrizione | Default | Fonte |
 |----------------|-------------|---------|-------|
+| `SPM_FIC_CLIENT_ID` / `spm_fic_client_id` | OAuth Client ID Fatture in Cloud | - | [includes/oauth-utils.php:12] |
+| `SPM_FIC_CLIENT_SECRET` / `spm_fic_client_secret` | OAuth Client Secret Fatture in Cloud | - | [includes/oauth-utils.php:13] |
 | `spm_fic_access_token` | Token OAuth accesso Fatture in Cloud | - | [oauth.php:44] |
 | `spm_fic_refresh_token` | Token refresh OAuth per auto-rinnovo | - | [oauth.php:45] |
 | `spm_fic_company_id` | ID azienda target in Fatture in Cloud | - | [oauth.php:51] |
 | `spm_last_sync_timestamp` | Timestamp ultima sincronizzazione clienti | - | [api/fatture-in-cloud.php:162] |
 | `spm_last_sync_method` | Trigger sincronizzazione (manuale/cron) | - | [api/fatture-in-cloud.php:163] |
+
+Per sicurezza, definire `SPM_FIC_CLIENT_ID` e `SPM_FIC_CLIENT_SECRET` nel file `wp-config.php` o salvarli come opzioni protette `spm_fic_client_id` e `spm_fic_client_secret`. **Non** includere queste credenziali nel repository.
+
+```php
+// wp-config.php
+define('SPM_FIC_CLIENT_ID', 'your-client-id');
+define('SPM_FIC_CLIENT_SECRET', 'your-client-secret');
+```
 
 ### Configurazione Servizi [acf-fields/acf-servizi.php:1-180]
 
