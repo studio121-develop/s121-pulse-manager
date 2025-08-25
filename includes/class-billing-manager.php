@@ -376,6 +376,15 @@ class SPM_Billing_Manager {
 	check_ajax_referer('spm_billing_mark');
 	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Non autorizzato'], 403);
 
+	// Rate limiting per operazioni di fatturazione
+	if (class_exists('SPM_Rate_Limiter')) {
+		$limiter = SPM_Rate_Limiter::instance();
+		if (!$limiter->can_proceed('billing_mark', 10, 300)) { // max 10 per 5 min
+			$info = $limiter->get_limit_info('billing_mark');
+			wp_send_json_error(['message' => $limiter->get_limit_message('billing_mark', $info)], 429);
+		}
+	}
+
 	$id     = isset($_POST['id']) ? (int)$_POST['id'] : 0;
 	$to     = sanitize_text_field($_POST['to'] ?? '');
 	$reason = sanitize_textarea_field($_POST['reason'] ?? '');

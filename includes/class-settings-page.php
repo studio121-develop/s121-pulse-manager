@@ -41,6 +41,11 @@ class SPM_Settings_Page {
 			'tolleranza_scaduto_giorni' => 60, // entro questa soglia si può allineare
 			'auto_cessazione_giorni'    => 90, // oltre questa soglia → cessato
 			
+			// Fatture in Cloud API
+			'fic_client_id'     => '', // Client ID OAuth Fatture in Cloud
+			'fic_client_secret' => '', // Client Secret OAuth Fatture in Cloud
+			'fic_redirect_uri'  => '', // URI di redirect OAuth
+			
 			// Frontend
 			'frontend_mode'                 => 'static', // normal | static | off
 			'frontend_redirect_logged_in'   => 1,        // 1/0
@@ -88,11 +93,12 @@ class SPM_Settings_Page {
 
 		// Sezione logica (non renderizzata con do_settings_sections, usiamo UI custom)
 		add_settings_section('spm_contract_policy', 'Policy Contratti', '__return_false', self::PAGE_SLUG);
+		add_settings_section('smp_fic_api', 'Fatture in Cloud API', '__return_false', self::PAGE_SLUG);
 
-		// Campo: Tolleranza “scaduto poco”
+		// Campo: Tolleranza "scaduto poco"
 		add_settings_field(
 			'tolleranza_scaduto_giorni',
-			'Tolleranza “scaduto poco” (giorni)',
+			'Tolleranza "scaduto poco" (giorni)',
 			[__CLASS__, 'render_number_field'],
 			self::PAGE_SLUG,
 			'spm_contract_policy',
@@ -107,6 +113,34 @@ class SPM_Settings_Page {
 			self::PAGE_SLUG,
 			'spm_contract_policy',
 			['key' => 'auto_cessazione_giorni', 'min' => 1, 'desc' => 'Oltre questa soglia un contratto è considerato cessato.']
+		);
+
+		// Campi API Fatture in Cloud
+		add_settings_field(
+			'fic_client_id',
+			'Client ID',
+			[__CLASS__, 'render_text_field'],
+			self::PAGE_SLUG,
+			'smp_fic_api',
+			['key' => 'fic_client_id', 'desc' => 'Client ID dell\'app OAuth Fatture in Cloud']
+		);
+
+		add_settings_field(
+			'fic_client_secret',
+			'Client Secret',
+			[__CLASS__, 'render_password_field'],
+			self::PAGE_SLUG,
+			'smp_fic_api',
+			['key' => 'fic_client_secret', 'desc' => 'Client Secret dell\'app OAuth Fatture in Cloud (protetto)']
+		);
+
+		add_settings_field(
+			'fic_redirect_uri',
+			'URI di Redirect',
+			[__CLASS__, 'render_text_field'],
+			self::PAGE_SLUG,
+			'smp_fic_api',
+			['key' => 'fic_redirect_uri', 'desc' => 'URI di redirect OAuth (default: /wp-content/plugins/s121-pulse-manager/oauth.php)']
 		);
 	}
 
@@ -131,6 +165,22 @@ class SPM_Settings_Page {
 			$out['auto_cessazione_giorni'] = $out['tolleranza_scaduto_giorni'];
 			add_settings_error(self::OPTION_NAME, 'spm_policy_adjust',
 				'Auto-cessazione riallineata alla tolleranza: non può essere inferiore.', 'updated');
+		}
+
+		// ===== Fatture in Cloud API =====
+		$out['fic_client_id']     = sanitize_text_field($in['fic_client_id'] ?? $out['fic_client_id']);
+		$out['fic_client_secret'] = sanitize_text_field($in['fic_client_secret'] ?? $out['fic_client_secret']);
+		$out['fic_redirect_uri']  = esc_url_raw($in['fic_redirect_uri'] ?? $out['fic_redirect_uri']);
+
+		// Validazione Client ID (formato tipico OAuth)
+		if (!empty($out['fic_client_id']) && !preg_match('/^[a-zA-Z0-9_-]+$/', $out['fic_client_id'])) {
+			add_settings_error(self::OPTION_NAME, 'fic_client_id_invalid',
+				'Client ID non valido: deve contenere solo caratteri alfanumerici, _ e -', 'error');
+		}
+
+		// Auto-generate redirect URI se vuoto
+		if (empty($out['fic_redirect_uri'])) {
+			$out['fic_redirect_uri'] = site_url('/wp-content/plugins/s121-pulse-manager/oauth.php');
 		}
 		
 		// ===== Frontend =====
@@ -216,20 +266,181 @@ class SPM_Settings_Page {
 		if ($desc) echo "<p class='description'>{$desc}</p>";
 	}
 
+	public static function render_text_field($args) {
+		$key   = $args['key'];
+		$desc  = esc_html($args['desc'] ?? '');
+		$value = esc_attr(self::get($key));
+		echo "<input type='text' name='" . esc_attr(self::OPTION_NAME) . "[{$key}]' value='{$value}' class='regular-text' />";
+		if ($desc) echo "<p class='description'>{$desc}</p>";
+	}
+
+	public static function render_password_field($args) {
+		$key   = $args['key'];
+		$desc  = esc_html($args['desc'] ?? '');
+		$value = self::get($key);
+		$masked = !empty($value) ? str_repeat('•', min(strlen($value), 20)) : '';
+		echo "<input type='password' name='" . esc_attr(self::OPTION_NAME) . "[{$key}]' value='" . esc_attr($value) . "' class='regular-text' placeholder='{$masked}' />";
+		if ($desc) echo "<p class='description'>{$desc}</p>";
+	}
+
 	/* =========================
-	 * Page render (UI a carte + manutenzione)
+	 * Helper methods
+	 * ========================= */
+	
+	/** Ottieni URL della pagina impostazioni */
+	private static function get_settings_url() {
+		return admin_url('admin.php?page=' . self::PAGE_SLUG);
+	}
+	
+	/** Includi CSS e JS per la pagina admin */
+	private static function enqueue_admin_assets() {
+		// CSS inline per la pagina
+		add_action('admin_footer', function() {
+			?>
+			<style>
+			.spm-settings-wrap {
+				background: #f1f1f1;
+				margin: 20px 0 0 -20px;
+				padding: 0;
+			}
+			.spm-main-title {
+				background: #fff;
+				margin: 0;
+				padding: 20px 30px;
+				border-bottom: 1px solid #ddd;
+				display: flex;
+				align-items: center;
+				gap: 12px;
+			}
+			.spm-logo { font-size: 24px; }
+			.spm-version {
+				background: #00a32a;
+				color: #fff;
+				padding: 2px 8px;
+				border-radius: 12px;
+				font-size: 11px;
+				font-weight: 600;
+			}
+			.spm-description {
+				background: #fff;
+				margin: 0;
+				padding: 0 30px 20px 30px;
+				color: #666;
+				border-bottom: 1px solid #ddd;
+			}
+			.spm-tab-wrapper {
+				background: #fff;
+				margin: 0;
+				border-bottom: 1px solid #ddd;
+				padding-left: 20px;
+			}
+			.spm-tab-wrapper .nav-tab {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				border: none;
+				background: transparent;
+				color: #646970;
+				padding: 12px 20px;
+			}
+			.spm-tab-wrapper .nav-tab-active {
+				color: #2271b1;
+				border-bottom: 3px solid #2271b1;
+				background: #f9f9f9;
+			}
+			.spm-tab-content {
+				background: #fff;
+				padding: 30px;
+				min-height: 500px;
+			}
+			.spm-settings-section {
+				background: #fff;
+				border: 1px solid #ddd;
+				border-radius: 6px;
+				margin-bottom: 20px;
+				overflow: hidden;
+			}
+			.smp-settings-section h2 {
+				background: #f8f9fa;
+				margin: 0;
+				padding: 15px 20px;
+				border-bottom: 1px solid #ddd;
+				font-size: 16px;
+			}
+			.spm-settings-section-content {
+				padding: 20px;
+			}
+			.spm-field-row {
+				display: grid;
+				grid-template-columns: 200px 1fr;
+				gap: 15px;
+				align-items: start;
+				margin-bottom: 20px;
+			}
+			.spm-field-row:last-child { margin-bottom: 0; }
+			.spm-field-label {
+				font-weight: 600;
+				color: #23282d;
+				padding-top: 5px;
+			}
+			.spm-field-description {
+				color: #666;
+				font-size: 13px;
+				font-style: italic;
+				margin-top: 5px;
+			}
+			.spm-stats-cards {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+				gap: 20px;
+				margin-bottom: 30px;
+			}
+			.spm-stat-card {
+				background: #fff;
+				border: 1px solid #ddd;
+				border-radius: 6px;
+				padding: 20px;
+				text-align: center;
+				border-left: 4px solid #2271b1;
+			}
+			.spm-stat-value {
+				font-size: 28px;
+				font-weight: bold;
+				color: #2271b1;
+				margin: 10px 0;
+			}
+			.spm-danger { border-left-color: #dc3232; }
+			.spm-danger .spm-stat-value { color: #dc3232; }
+			.spm-warning { border-left-color: #dba617; }
+			.spm-warning .spm-stat-value { color: #dba617; }
+			</style>
+			<?php
+		});
+	}
+
+	/* =========================
+	 * Page render (UI a tab moderne)
 	 * ========================= */
 
 	public static function render() {
 		if (!current_user_can('manage_options')) wp_die('Non autorizzato');
 	
-		$tolleranza = (int) self::get('tolleranza_scaduto_giorni');
-		$auto       = (int) self::get('auto_cessazione_giorni');
-	
-		$notice = isset($_GET['spm_notice']) ? sanitize_text_field($_GET['spm_notice']) : '';
+		$current_tab = sanitize_text_field($_GET['tab'] ?? 'contracts');
+		$notice = isset($_GET['spm_notice']) ? sanitize_text_field($_GET['smp_notice']) : '';
+		
+		// Includi CSS e JS per la pagina
+		self::enqueue_admin_assets();
 		?>
-		<div class="wrap">
-			<h1>⚙️ Impostazioni – S121 Pulse Manager</h1>
+		<div class="wrap spm-settings-wrap">
+			<h1 class="spm-main-title">
+				<span class="spm-logo">⚙️</span>
+				S121 Pulse Manager
+				<span class="spm-version">v2.0</span>
+			</h1>
+			
+			<p class="spm-description">
+				Gestisci configurazioni, policy contratti e strumenti di manutenzione del sistema.
+			</p>
 	
 			<?php settings_errors(self::OPTION_NAME); ?>
 	
@@ -247,301 +458,423 @@ class SPM_Settings_Page {
 					</p>
 				</div>
 			<?php endif; ?>
-	
-			<div style="margin:12px 0 20px 0; color:#555;">
-				Definisci la <strong>policy di scadenza e rinnovo</strong>. Le regole impattano rinnovi automatici, azioni manuali e KPI.
-			</div>
-	
-			<!-- RIGA 1: RIASSUNTO POLICY -->
-			<div style="display:flex; flex-wrap:wrap; gap:20px; margin:20px 0;">
-				<div style="flex:1 1 280px; background:white; padding:20px; border-left:4px solid #dba617; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-					<h3 style="margin-top:0; color:#dba617;">⏰ Tolleranza “Scaduto poco”</h3>
-					<p style="font-size:28px; margin:0; font-weight:bold;"><?php echo esc_html($tolleranza); ?> giorni</p>
-					<p style="color:#666; margin:6px 0 0 0;">Entro questa finestra il rinnovo allinea la scadenza senza cessare il contratto.</p>
-				</div>
-	
-				<div style="flex:1 1 280px; background:white; padding:20px; border-left:4px solid #dc3232; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-					<h3 style="margin-top:0; color:#dc3232;">⛔ Auto-cessazione</h3>
-					<p style="font-size:28px; margin:0; font-weight:bold;"><?php echo esc_html($auto); ?> giorni</p>
-					<p style="color:#666; margin:6px 0 0 0;">Oltre questa soglia lo stato diventa <strong>cessato</strong> e il rinnovo è bloccato.</p>
-				</div>
-	
-				<div style="flex:1 1 280px; background:white; padding:20px; border-left:4px solid #2271b1; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-					<h3 style="margin-top:0; color:#2271b1;">📐 Regola effettiva</h3>
-					<p style="margin:0; line-height:1.6; color:#333;">
-						<span style="display:block; margin-bottom:6px;">• <strong>Scaduto ≤ <?php echo esc_html($tolleranza); ?>gg</strong> → <em>Rinnovo consentito</em> (catch-up)</span>
-						<span style="display:block;">• <strong>Scaduto &gt; <?php echo esc_html($auto); ?>gg</strong> → <em>Auto-cessato</em> (rinnovo bloccato)</span>
-					</p>
-				</div>
-			</div>
-	
-			<div style="display:flex; flex-wrap:wrap; gap:20px;">
-				<!-- ===== FORM OPZIONI (SOLO questa card) ===== -->
-				<form method="post" action="options.php" style="flex:1 1 520px; background:white; padding:20px; border-left:4px solid #2c3338; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-					<?php settings_fields(self::OPTION_GROUP); ?>
-					<h2 style="margin:0 0 12px 0;">🔧 Policy contratti</h2>
-	
-					<div style="display:flex; align-items:center; gap:12px; margin:12px 0;">
-						<label for="spm_tol" style="width:260px; font-weight:600;">Tolleranza “scaduto poco”</label>
-						<input id="spm_tol" type="number" min="0" name="<?php echo esc_attr(self::OPTION_NAME); ?>[tolleranza_scaduto_giorni]"
-							   value="<?php echo esc_attr($tolleranza); ?>" class="small-text" />
-						<span style="color:#666;">giorni</span>
-					</div>
-					<p style="margin:0 0 16px 0; color:#666;">Entro questa soglia consentiamo il rinnovo con allineamento (roll-forward fino a superare oggi).</p>
-	
-					<div style="display:flex; align-items:center; gap:12px; margin:12px 0;">
-						<label for="spm_auto" style="width:260px; font-weight:600;">Soglia auto-cessazione</label>
-						<input id="spm_auto" type="number" min="1" name="<?php echo esc_attr(self::OPTION_NAME); ?>[auto_cessazione_giorni]"
-							   value="<?php echo esc_attr($auto); ?>" class="small-text" />
-						<span style="color:#666;">giorni</span>
-					</div>
-					<p style="margin:0; color:#666;">Superata questa soglia, lo stato passa a <strong>cessato</strong> e il rinnovo è bloccato.</p>
-					
-					<hr style="margin:24px 0;">
-					<h2 style="margin:0 0 12px 0;">🌐 Frontend pubblico</h2>
-					
-					<div style="display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:center;">
-					
-						<label for="spm_frontend_mode" style="font-weight:600;">Modalità</label>
-						<select id="spm_frontend_mode" name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_mode]">
-							<?php $m = (string) self::get('frontend_mode'); ?>
-							<option value="normal" <?php selected($m,'normal'); ?>>normal – lascia il tema attivo</option>
-							<option value="static" <?php selected($m,'static'); ?>>static – pagina statica minimale</option>
-							<option value="off"    <?php selected($m,'off');    ?>>off – solo backend (login)</option>
-						</select>
-						<span class="description" style="grid-column:2 / span 1; color:#666;">Richiede il file/class SPM_Frontend_Controller.</span>
-					
-						<label for="spm_frontend_redirect" style="font-weight:600;">Se loggato, vai in Bacheca</label>
-						<input id="spm_frontend_redirect" type="checkbox" value="1"
-							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_redirect_logged_in]"
-							<?php checked( (int) self::get('frontend_redirect_logged_in'), 1 ); ?> />
-						<span class="description" style="grid-column:2 / span 1; color:#666;">Valido in modalità <em>static</em>.</span>
-					
-						<label for="spm_frontend_noindex" style="font-weight:600;">Noindex/Nofollow</label>
-						<input id="spm_frontend_noindex" type="checkbox" value="1"
-							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_noindex]"
-							<?php checked( (int) self::get('frontend_noindex'), 1 ); ?> />
-						<span class="description" style="grid-column:2 / span 1; color:#666;">Invia X-Robots-Tag e meta robots come noindex.</span>
-					
-						<label for="spm_frontend_html" style="font-weight:600; align-self:start;">HTML pagina statica (opzionale)</label>
-						<textarea id="spm_frontend_html" rows="8" style="width:100%;"
-							name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_static_html]"><?php
-							echo esc_textarea( (string) self::get('frontend_static_html') ); ?></textarea>
-						<span class="description" style="grid-column:2 / span 1; color:#666;">Lascia vuoto per usare il template predefinito del controller.</span>
-					</div>
-					
-					<hr style="margin:24px 0;">
-					<h2 style="margin:0 0 12px 0;">🧭 Backend – Override Bacheca</h2>
-					
-					<div style="display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:start;">
-						<label style="font-weight:600;">Attiva override</label>
-						<label>
-							<input type="checkbox" value="1"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_enabled]"
-								<?php checked((int) self::get('override_dashboard_enabled'), 1); ?> />
-							Reindirizza la bacheca nativa verso una pagina personalizzata
-						</label>
-					
-						<label for="spm_od_target" style="font-weight:600;">Destinazione</label>
-						<div>
-							<input id="spm_od_target" type="text" style="width:100%; max-width:520px;"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_target]"
-								value="<?php echo esc_attr((string) self::get('override_dashboard_target')); ?>" />
-							<p class="description" style="margin:.4em 0 0 0; color:#666;">
-								Accetta <code>slug</code> admin (es. <code>s121-pulse-manager</code>) oppure un URL assoluto (https://…).
-								Se inserisci uno slug, porterà a <code>admin.php?page=SLUG</code>.
-							</p>
-						</div>
-						
-					
-						<label style="font-weight:600;">Bypass amministratori</label>
-						<label>
-							<input type="checkbox" value="1"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_bypass_admin]"
-								<?php checked((int) self::get('override_dashboard_bypass_admin'), 1); ?> />
-							Non applicare l’override a chi ha <code>manage_options</code> (consigliato)
-						</label>
-					
-						<label for="spm_od_roles" style="font-weight:600;">Limita a ruoli (opzionale)</label>
-						<div>
-							<?php
-							$all_roles = get_editable_roles();
-							$sel = (array) self::get('override_dashboard_roles');
-							?>
-							<select id="spm_od_roles" multiple size="6" style="width:100%; max-width:320px;"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_roles][]">
-								<?php foreach ($all_roles as $role_key => $role_obj): ?>
-									<option value="<?php echo esc_attr($role_key); ?>" <?php selected(in_array($role_key, $sel, true)); ?>>
-										<?php echo esc_html($role_obj['name'] . ' (' . $role_key . ')'); ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-							<p class="description" style="margin:.4em 0 0 0; color:#666;">
-								Lascia vuoto per applicare l’override a <em>tutti</em> i ruoli (al netto del bypass admin).
-							</p>
-						</div>
-					</div>
+			
+			<!-- Navigazione Tab -->
+			<nav class="nav-tab-wrapper spm-tab-wrapper">
+				<a href="<?php echo esc_url(add_query_arg('tab', 'contracts', self::get_settings_url())); ?>" 
+				   class="nav-tab <?php echo $current_tab === 'contracts' ? 'nav-tab-active' : ''; ?>">
+					<span class="dashicons dashicons-calendar-alt"></span>
+					Policy Contratti
+				</a>
+				<a href="<?php echo esc_url(add_query_arg('tab', 'api', self::get_settings_url())); ?>" 
+				   class="nav-tab <?php echo $current_tab === 'api' ? 'nav-tab-active' : ''; ?>">
+					<span class="dashicons dashicons-cloud"></span>
+					Fatture in Cloud
+				</a>
+				<a href="<?php echo esc_url(add_query_arg('tab', 'frontend', self::get_settings_url())); ?>" 
+				   class="nav-tab <?php echo $current_tab === 'frontend' ? 'nav-tab-active' : ''; ?>">
+					<span class="dashicons dashicons-desktop"></span>
+					Frontend
+				</a>
+				<a href="<?php echo esc_url(add_query_arg('tab', 'admin', self::get_settings_url())); ?>" 
+				   class="nav-tab <?php echo $current_tab === 'admin' ? 'nav-tab-active' : ''; ?>">
+					<span class="dashicons dashicons-admin-settings"></span>
+					Amministrazione
+				</a>
+				<a href="<?php echo esc_url(add_query_arg('tab', 'tools', self::get_settings_url())); ?>" 
+				   class="nav-tab <?php echo $current_tab === 'tools' ? 'nav-tab-active' : ''; ?>">
+					<span class="dashicons dashicons-admin-tools"></span>
+					Strumenti
+				</a>
+			</nav>
+			
+			<!-- Contenuto Tab -->
+			<div class="spm-tab-content">
+				<?php
+				switch ($current_tab) {
+					case 'contracts':
+						self::render_contracts_tab();
+						break;
+					case 'api':
+						self::render_api_tab();
+						break;
+					case 'frontend':
+						self::render_frontend_tab();
+						break;
+					case 'admin':
+						self::render_admin_tab();
+						break;
+					case 'tools':
+						self::render_tools_tab();
+						break;
+					default:
+						self::render_contracts_tab();
+				}
+				?>
+		</div>
+		<?php
+	}
 
-<hr style="margin:24px 0;">
-					<h2 style="margin:0 0 12px 0;">🧱 Backend – Nascondi voci di menu</h2>
-					
-					<div style="display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:start;">
-						<label style="font-weight:600;">Attiva</label>
-						<label>
-							<input type="checkbox" value="1"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_enabled]"
-								<?php checked((int) self::get('hide_menus_enabled'), 1); ?> />
-							Applica le regole di nascondimento voci di menu
-						</label>
-					
-						<label style="font-weight:600;">Bypass amministratori</label>
-						<label>
-							<input type="checkbox" value="1"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_bypass_admin]"
-								<?php checked((int) self::get('hide_menus_bypass_admin'), 1); ?> />
-							Non applicare a chi ha <code>manage_options</code>
-						</label>
-					
-						<label for="spm_hide_roles" style="font-weight:600;">Limita a ruoli (opzionale)</label>
+	/* =========================
+	 * Tab render methods
+	 * ========================= */
+
+	/** Render tab Policy Contratti */
+	private static function render_contracts_tab() {
+		$tolleranza = (int) self::get('tolleranza_scaduto_giorni');
+		$auto = (int) self::get('auto_cessazione_giorni');
+		?>
+		
+		<!-- Statistiche Overview -->
+		<div class="spm-stats-cards">
+			<div class="spm-stat-card spm-warning">
+				<h3>⏰ Tolleranza Scaduto</h3>
+				<div class="spm-stat-value"><?php echo esc_html($tolleranza); ?> giorni</div>
+				<p>Rinnovo con allineamento consentito</p>
+			</div>
+			<div class="spm-stat-card spm-danger">
+				<h3>⛔ Auto-cessazione</h3>
+				<div class="spm-stat-value"><?php echo esc_html($auto); ?> giorni</div>
+				<p>Contratto automaticamente cessato</p>
+			</div>
+			<div class="spm-stat-card">
+				<h3>📐 Regola Effettiva</h3>
+				<div style="font-size: 14px; line-height: 1.6; color: #333; margin-top: 15px;">
+					<strong>≤ <?php echo esc_html($tolleranza); ?>gg:</strong> Rinnovo OK<br>
+					<strong>> <?php echo esc_html($auto); ?>gg:</strong> Auto-cessato
+				</div>
+			</div>
+		</div>
+
+		<form method="post" action="options.php" class="spm-settings-form">
+			<?php settings_fields(self::OPTION_GROUP); ?>
+			
+			<div class="spm-settings-section">
+				<h2>🔧 Policy Contratti</h2>
+				<div class="spm-settings-section-content">
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="spm_tol">Tolleranza "Scaduto poco"</label>
 						<div>
-							<?php $all_roles = get_editable_roles(); $sel_roles = (array) self::get('hide_menus_roles'); ?>
-							<select id="spm_hide_roles" multiple size="6" style="width:100%; max-width:320px;"
-								name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_roles][]">
-								<?php foreach ($all_roles as $role_key => $role_obj): ?>
-									<option value="<?php echo esc_attr($role_key); ?>" <?php selected(in_array($role_key, $sel_roles, true)); ?>>
-										<?php echo esc_html($role_obj['name'] . ' (' . $role_key . ')'); ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-							<p class="description" style="margin:.4em 0 0 0; color:#666;">
-								Vuoto = applica a tutti (al netto del bypass admin).
+							<input id="spm_tol" type="number" min="0" 
+								   name="<?php echo esc_attr(self::OPTION_NAME); ?>[tolleranza_scaduto_giorni]"
+								   value="<?php echo esc_attr($tolleranza); ?>" 
+								   class="small-text" /> giorni
+							<p class="spm-field-description">
+								Entro questa soglia è consentito il rinnovo con allineamento della scadenza.
 							</p>
 						</div>
+					</div>
 					
-						<label style="font-weight:600;">Voci da nascondere</label>
-						<label style="font-weight:600;">Voci da nascondere</label>
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="spm_auto">Soglia Auto-cessazione</label>
 						<div>
-							<?php
-							$picked   = (array) self::get('hide_menus_items');
-							$registry = get_option('spm_menu_registry');
-							$items    = (is_array($registry) && !empty($registry['items'])) ? $registry['items'] : [];
-						
-							// Fallback: se non c'è ancora registro, offri una lista minima
-							if (!$items) {
-								$items = [
-									['slug'=>'index.php','title'=>'Bacheca','parent'=>null],
-									['slug'=>'edit.php','title'=>'Articoli','parent'=>null],
-									['slug'=>'upload.php','title'=>'Media','parent'=>null],
-									['slug'=>'edit.php?post_type=page','title'=>'Pagine','parent'=>null],
-									['slug'=>'edit-comments.php','title'=>'Commenti','parent'=>null],
-									['slug'=>'themes.php','title'=>'Aspetto','parent'=>null],
-									['slug'=>'plugins.php','title'=>'Plugin','parent'=>null],
-									['slug'=>'users.php','title'=>'Utenti','parent'=>null],
-									['slug'=>'tools.php','title'=>'Strumenti','parent'=>null],
-									['slug'=>'options-general.php','title'=>'Impostazioni','parent'=>null],
-									['slug'=>'edit.php?post_type=acf-field-group','title'=>'ACF','parent'=>null],
-								];
-							}
-						
-							// Raggruppa per parent per una UX più chiara (Top-level e sotto)
-							$grouped = ['__top__' => []];
-							foreach ($items as $it) {
-								$p = $it['parent'] ? (string)$it['parent'] : '__top__';
-								if (!isset($grouped[$p])) $grouped[$p] = [];
-								$grouped[$p][] = $it;
-							}
-						
-							echo '<div style="display:flex; gap:24px; flex-wrap:wrap;">';
-						
-							// Stampa prima il top-level
-							if (!empty($grouped['__top__'])) {
-								echo '<div><h4 style="margin:6px 0;">Top-level</h4>';
-								foreach ($grouped['__top__'] as $it) {
-									$slug  = $it['slug'];
-									$title = $it['title'];
-									?>
-									<label style="display:block; margin:.2em 0;">
-										<input type="checkbox"
-											name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_items][]"
-											value="<?php echo esc_attr($slug); ?>"
-											<?php checked(in_array($slug, $picked, true)); ?> />
-										<?php echo esc_html($title); ?> <code style="opacity:.6;"><?php echo esc_html($slug); ?></code>
-									</label>
-									<?php
-								}
-								echo '</div>';
-							}
-						
-							// Poi i gruppi con parent
-							foreach ($grouped as $parent => $children) {
-								if ($parent === '__top__') continue;
-								// Trova il titolo del parent (se presente tra gli items)
-								$parent_title = $parent;
-								foreach ($items as $it) {
-									if ($it['slug'] === $parent) { $parent_title = $it['title']; break; }
-								}
-								echo '<div><h4 style="margin:6px 0;">Sottomenu di: '.esc_html($parent_title).'</h4>';
-								foreach ($children as $it) {
-									$slug  = $it['slug'];
-									$title = $it['title'];
-									?>
-									<label style="display:block; margin:.2em 0;">
-										<input type="checkbox"
-											name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_items][]"
-											value="<?php echo esc_attr($slug); ?>"
-											<?php checked(in_array($slug, $picked, true)); ?> />
-										<?php echo esc_html($title); ?> <code style="opacity:.6;"><?php echo esc_html($slug); ?></code>
-									</label>
-									<?php
-								}
-								echo '</div>';
-							}
-						
-							echo '</div>';
-						
-							// Info registro
-							if (is_array($registry) && !empty($registry['last_update'])) {
-								echo '<p class="description" style="margin:.5em 0 0 0; color:#666;">Elenco aggiornato: '
-									. esc_html(date_i18n(get_option('date_format').' '.get_option('time_format'), (int)$registry['last_update'])) . '</p>';
-							} else {
-								echo '<p class="description" style="margin:.5em 0 0 0; color:#666;">Apri questa pagina come amministratore dopo aver caricato la bacheca per popolare l’elenco completo.</p>';
-							}
-							?>
+							<input id="spm_auto" type="number" min="1"
+								   name="<?php echo esc_attr(self::OPTION_NAME); ?>[auto_cessazione_giorni]"
+								   value="<?php echo esc_attr($auto); ?>" 
+								   class="small-text" /> giorni
+							<p class="spm-field-description">
+								Superata questa soglia, il contratto è automaticamente cessato e il rinnovo bloccato.
+							</p>
 						</div>
 					</div>
-
-	
-					<div style="margin-top:18px;">
-						<?php submit_button('💾 Salva impostazioni'); ?>
-					</div>
-				</form>
-	
-				<!-- ===== CARD MANUTENZIONE (FUORI dal form options.php) ===== -->
-				<div style="flex:1 1 380px; background:white; padding:20px; border-left:4px solid #72aee6; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-					<h2 style="margin:0 0 12px 0;">🛠️ Manutenzione statistiche</h2>
-					<p style="margin:0 0 10px 0; color:#555;">Operazioni idempotenti per ripristinare la coerenza di history & KPI.</p>
-	
-					<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;">
-						<input type="hidden" name="action" value="spm_stats_rebuild_kpis" />
-						<?php wp_nonce_field('spm_stats_rebuild_kpis'); ?>
-						<button type="submit" class="button">🔁 Ricostruisci KPI</button>
-						<span style="color:#666; margin-left:8px;">Ricalcola i KPI per tutto lo storico disponibile.</span>
-					</form>
-	
-					<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;">
-						<input type="hidden" name="action" value="spm_stats_purge_orphans" />
-						<?php wp_nonce_field('spm_stats_purge_orphans'); ?>
-						<button type="submit" class="button">🧽 Pulisci orfani + KPI</button>
-						<span style="color:#666; margin-left:8px;">Cancella history di contratti rimossi e ricostruisci KPI.</span>
-					</form>
-	
-					<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="margin:10px 0;" onsubmit="return confirm('ATTENZIONE: questa operazione svuota le tabelle history e KPI e rimaterializza tutto da zero. Procedere?');">
-						<input type="hidden" name="action" value="spm_stats_hard_reindex" />
-						<?php wp_nonce_field('spm_stats_hard_reindex'); ?>
-						<button type="submit" class="button button-primary">⚠️ Hard Reindex (TRUNCATE + Rebuild)</button>
-						<span style="color:#666; display:block; margin-top:6px;">Usa solo in caso di import massivi o incoerenze gravi.</span>
-					</form>
 				</div>
+			</div>
+
+			<?php submit_button('💾 Salva Impostazioni', 'primary', 'submit', false); ?>
+		</form>
+		<?php
+	}
+
+	/** Render tab Fatture in Cloud API */
+	private static function render_api_tab() {
+		?>
+		<form method="post" action="options.php" class="spm-settings-form">
+			<?php settings_fields(self::OPTION_GROUP); ?>
+			
+			<div class="spm-settings-section">
+				<h2>🔗 Credenziali OAuth Fatture in Cloud</h2>
+				<div class="spm-settings-section-content">
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="spm_fic_client_id">Client ID</label>
+						<div>
+							<input id="spm_fic_client_id" type="text"
+								   name="<?php echo esc_attr(self::OPTION_NAME); ?>[fic_client_id]"
+								   value="<?php echo esc_attr(self::get('fic_client_id')); ?>" 
+								   class="regular-text" placeholder="es. APSzK7BJjV5Ps..." />
+							<p class="spm-field-description">
+								Client ID dell'applicazione OAuth registrata su Fatture in Cloud.
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="smp-field-label" for="spm_fic_client_secret">Client Secret</label>
+						<div>
+							<input id="spm_fic_client_secret" type="password"
+								   name="<?php echo esc_attr(self::OPTION_NAME); ?>[fic_client_secret]"
+								   value="<?php echo esc_attr(self::get('fic_client_secret')); ?>" 
+								   class="regular-text" placeholder="<?php 
+								   $secret = self::get('fic_client_secret');
+								   echo !empty($secret) ? str_repeat('•', min(strlen($secret), 20)) : 'es. 5Xd9ABBPX...';
+								   ?>" />
+							<p class="spm-field-description">
+								Client Secret dell'applicazione OAuth (campo protetto).
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="spm_fic_redirect_uri">URI di Redirect</label>
+						<div>
+							<input id="spm_fic_redirect_uri" type="url"
+								   name="<?php echo esc_attr(self::OPTION_NAME); ?>[fic_redirect_uri]"
+								   value="<?php echo esc_attr(self::get('fic_redirect_uri')); ?>" 
+								   class="regular-text" 
+								   placeholder="<?php echo esc_attr(site_url('/wp-content/plugins/s121-pulse-manager/oauth.php')); ?>" />
+							<p class="spm-field-description">
+								URI di callback OAuth. Lascia vuoto per auto-generazione.
+							</p>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<?php submit_button('💾 Salva Credenziali', 'primary', 'submit', false); ?>
+		</form>
+		
+		<div class="spm-settings-section">
+			<h2>🔍 Test Connessione</h2>
+			<div class="spm-settings-section-content">
+				<p>Verifica che le credenziali siano configurate correttamente:</p>
+				<p>
+					<a href="<?php echo esc_url(site_url('/wp-content/plugins/s121-pulse-manager/oauth.php')); ?>" 
+					   class="button" target="_blank">
+						🔗 Testa OAuth Flow
+					</a>
+					<a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?spm_test_sync=1'), 'spm_manual_sync')); ?>" 
+					   class="button">
+						🔄 Sync Manuale Clienti
+					</a>
+				</p>
+			</div>
+		</div>
+		<?php
+	}
+
+	/** Render tab Frontend */
+	private static function render_frontend_tab() {
+		?>
+		<form method="post" action="options.php" class="spm-settings-form">
+			<?php settings_fields(self::OPTION_GROUP); ?>
+			
+			<div class="spm-settings-section">
+				<h2>🌐 Frontend Pubblico</h2>
+				<div class="spm-settings-section-content">
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="spm_frontend_mode">Modalità Frontend</label>
+						<div>
+							<select id="spm_frontend_mode" name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_mode]">
+								<?php $m = (string) self::get('frontend_mode'); ?>
+								<option value="normal" <?php selected($m,'normal'); ?>>Normal - Tema WordPress attivo</option>
+								<option value="static" <?php selected($m,'static'); ?>>Static - Pagina minimale</option>
+								<option value="off" <?php selected($m,'off'); ?>>Off - Solo backend (login)</option>
+							</select>
+							<p class="spm-field-description">
+								Controlla come viene mostrato il frontend pubblico del sito.
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label">Redirect per utenti loggati</label>
+						<div>
+							<label>
+								<input type="checkbox" value="1"
+									   name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_redirect_logged_in]"
+									   <?php checked( (int) self::get('frontend_redirect_logged_in'), 1 ); ?> />
+								Reindirizza alla Bacheca
+							</label>
+							<p class="spm-field-description">
+								Se attivo, utenti loggati vengono automaticamente reindirizzati in admin.
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label">SEO Noindex</label>
+						<div>
+							<label>
+								<input type="checkbox" value="1"
+									   name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_noindex]"
+									   <?php checked( (int) self::get('frontend_noindex'), 1 ); ?> />
+								Applica noindex/nofollow
+							</label>
+							<p class="spm-field-description">
+								Impedisce l'indicizzazione del frontend da parte dei motori di ricerca.
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="spm_frontend_html">HTML Personalizzato</label>
+						<div>
+							<textarea id="spm_frontend_html" rows="8" class="large-text"
+								name="<?php echo esc_attr(self::OPTION_NAME); ?>[frontend_static_html]"><?php
+								echo esc_textarea( (string) self::get('frontend_static_html') ); ?></textarea>
+							<p class="spm-field-description">
+								HTML personalizzato per la modalità static (opzionale).
+							</p>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<?php submit_button('💾 Salva Frontend', 'primary', 'submit', false); ?>
+		</form>
+		<?php
+	}
+
+	/** Render tab Amministrazione Backend */
+	private static function render_admin_tab() {
+		?>
+		<form method="post" action="options.php" class="spm-settings-form">
+			<?php settings_fields(self::OPTION_GROUP); ?>
+			
+			<div class="spm-settings-section">
+				<h2>🧭 Override Bacheca WordPress</h2>
+				<div class="spm-settings-section-content">
+					<div class="spm-field-row">
+						<label class="spm-field-label">Attiva Override</label>
+						<div>
+							<label>
+								<input type="checkbox" value="1"
+									   name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_enabled]"
+									   <?php checked( (int) self::get('override_dashboard_enabled'), 1 ); ?> />
+								Reindirizza bacheca a pagina personalizzata
+							</label>
+							<p class="spm-field-description">
+								Se attivo, la bacheca WP reindirizzerà alla pagina specificata sotto.
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label" for="smp_dashboard_target">Pagina Destinazione</label>
+						<div>
+							<input id="spm_dashboard_target" type="text"
+								   name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_target]"
+								   value="<?php echo esc_attr(self::get('override_dashboard_target')); ?>" 
+								   class="regular-text" placeholder="s121-pulse-manager" />
+							<p class="spm-field-description">
+								Slug pagina admin o URL assoluto per il redirect.
+							</p>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label">Bypass Amministratori</label>
+						<div>
+							<label>
+								<input type="checkbox" value="1"
+									   name="<?php echo esc_attr(self::OPTION_NAME); ?>[override_dashboard_bypass_admin]"
+									   <?php checked( (int) self::get('override_dashboard_bypass_admin'), 1 ); ?> />
+								Non applicare a utenti con privilegi <code>manage_options</code>
+							</label>
+						</div>
+					</div>
+				</div>
+			</div>
+			
+			<div class="spm-settings-section">
+				<h2>🙈 Nascondi Voci Menu</h2>
+				<div class="spm-settings-section-content">
+					<div class="spm-field-row">
+						<label class="spm-field-label">Attiva Nascondimento</label>
+						<div>
+							<label>
+								<input type="checkbox" value="1"
+									   name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_enabled]"
+									   <?php checked( (int) self::get('hide_menus_enabled'), 1 ); ?> />
+								Nascondi voci di menu selezionate
+							</label>
+						</div>
+					</div>
+					
+					<div class="spm-field-row">
+						<label class="spm-field-label">Bypass Amministratori</label>
+						<div>
+							<label>
+								<input type="checkbox" value="1"
+									   name="<?php echo esc_attr(self::OPTION_NAME); ?>[hide_menus_bypass_admin]"
+									   <?php checked( (int) self::get('hide_menus_bypass_admin'), 1 ); ?> />
+								Non applicare a utenti con <code>manage_options</code>
+							</label>
+						</div>
+					</div>
+					
+					<p><em>Le voci da nascondere si configurano dinamicamente in base al menu corrente dell'utente.</em></p>
+				</div>
+			</div>
+
+			<?php submit_button('💾 Salva Amministrazione', 'primary', 'submit', false); ?>
+		</form>
+		<?php
+	}
+
+	/** Render tab Strumenti di Manutenzione */
+	private static function render_tools_tab() {
+		?>
+		<div class="spm-settings-section">
+			<h2>🛠️ Manutenzione Statistiche</h2>
+			<div class="spm-settings-section-content">
+				<p>Operazioni idempotenti per ripristinare la coerenza di history e KPI.</p>
+				
+				<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-top: 20px;">
+					<div style="border: 1px solid #ddd; border-radius: 6px; padding: 20px;">
+						<h4>🔁 Ricostruisci KPI</h4>
+						<p>Ricalcola i KPI mensili su tutto lo storico disponibile.</p>
+						<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>">
+							<input type="hidden" name="action" value="spm_stats_rebuild_kpis" />
+							<?php wp_nonce_field('spm_stats_rebuild_kpis'); ?>
+							<button type="submit" class="button">Avvia Rebuild KPI</button>
+						</form>
+					</div>
+					
+					<div style="border: 1px solid #ddd; border-radius: 6px; padding: 20px;">
+						<h4>🧽 Pulisci Orfani</h4>
+						<p>Cancella history di contratti rimossi e ricostruisci KPI.</p>
+						<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>">
+							<input type="hidden" name="action" value="spm_stats_purge_orphans" />
+							<?php wp_nonce_field('spm_stats_purge_orphans'); ?>
+							<button type="submit" class="button">Pulisci Orfani</button>
+						</form>
+					</div>
+					
+					<div style="border: 1px solid #dc3232; border-radius: 6px; padding: 20px;">
+						<h4>⚠️ Hard Reindex</h4>
+						<p style="color: #dc3232;"><strong>ATTENZIONE:</strong> Svuota completamente le tabelle e ricostruisce tutto.</p>
+						<form method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" 
+							  onsubmit="return confirm('ATTENZIONE: questa operazione svuota le tabelle history e KPI e rimaterializza tutto da zero. Procedere?');">
+							<input type="hidden" name="action" value="spm_stats_hard_reindex" />
+							<?php wp_nonce_field('spm_stats_hard_reindex'); ?>
+							<button type="submit" class="button button-primary">Hard Reindex</button>
+						</form>
+					</div>
+				</div>
+			</div>
+		</div>
+		
+		<div class="spm-settings-section">
+			<h2>🔗 Link Utili per Sviluppo</h2>
+			<div class="spm-settings-section-content">
+				<p>Strumenti per test e debug (solo per amministratori):</p>
+				<p>
+					<a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?spm_backfill=all'), 'spm_backfill_ops')); ?>" 
+					   class="button">📊 Backfill All Stats</a>
+					<a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?spm_billing_backfill=all'), 'spm_billing_backfill')); ?>" 
+					   class="button">🧾 Backfill Billing</a>
+				</p>
+				<p><em>Questi link includono già i nonce di sicurezza necessari.</em></p>
 			</div>
 		</div>
 		<?php

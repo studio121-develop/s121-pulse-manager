@@ -1,6 +1,12 @@
 <?php
 require_once(__DIR__ . '/vendor/autoload.php');
-require_once($_SERVER['DOCUMENT_ROOT'] . '/121tools/wp-load.php');
+// Carica WordPress in modo sicuro
+$wp_load_path = dirname(__FILE__, 4) . '/wp-load.php';
+if (!file_exists($wp_load_path)) {
+    // Fallback per installazioni non standard
+    $wp_load_path = $_SERVER['DOCUMENT_ROOT'] . '/wp-load.php';
+}
+require_once($wp_load_path);
 
 use FattureInCloud\OAuth2\OAuth2AuthorizationCode\OAuth2AuthorizationCodeManager;
 use FattureInCloud\OAuth2\Scope;
@@ -10,17 +16,26 @@ use GuzzleHttp\Client;
 session_set_cookie_params(86400);
 session_start();
 
-// 🔐 Credenziali app Fatture in Cloud
-$clientId = "APSzK7BJjV5PsKWnrHwKeV3eSU91isoh";
-$clientSecret = "5Xd9ABBPXl1577NsSqyQlDmDrVgcqSRsv9Y85h1yWSSdWwUZAdy6kTcPlpuigU2q";
-$redirectUri = "https://dev.studio121.it/121tools/wp-content/plugins/s121-pulse-manager/oauth.php";
+// 🔐 Credenziali app Fatture in Cloud dalle impostazioni
+require_once plugin_dir_path(__FILE__) . 'includes/oauth-utils.php';
+$creds = get_fic_credentials();
+
+if (!$creds) {
+	wp_die('⚠️ Credenziali Fatture in Cloud non configurate. <br><a href="' . esc_url(admin_url('admin.php?page=spm-settings')) . '">Vai alle impostazioni</a> per configurarle.');
+}
+
+$clientId = $creds['client_id'];
+$clientSecret = $creds['client_secret'];
+$redirectUri = $creds['redirect_uri'];
 
 // Istanzia OAuth manager
 $oauth = new OAuth2AuthorizationCodeManager($clientId, $clientSecret, $redirectUri);
 
-// ✅ Se già salvato, mostra i token
+// ✅ Se già salvato, mostra i token (mascherati per sicurezza)
 if (get_option('spm_fic_access_token')) {
-	echo '✅ Access token già presente in WordPress: <br>' . get_option('spm_fic_access_token');
+	$token = get_option('spm_fic_access_token');
+	$masked_token = substr($token, 0, 8) . str_repeat('•', max(0, strlen($token) - 12)) . substr($token, -4);
+	echo '✅ Access token già presente in WordPress: <br><code>' . esc_html($masked_token) . '</code>';
 	exit;
 }
 
@@ -36,7 +51,8 @@ if (!isset($_GET['code'])) {
 
 // ✅ Step 2: Callback dopo autorizzazione
 try {
-	$obj = $oauth->fetchToken($_GET['code']);
+	$code = sanitize_text_field($_GET['code']);
+	$obj = $oauth->fetchToken($code);
 
 	if (!isset($obj->error)) {
 		// Salva i token
@@ -55,13 +71,20 @@ try {
 		}
 
 		echo '✅ Token salvato nella sessione e nelle opzioni di WordPress.<br>';
-		echo 'Access token: ' . $obj->getAccessToken() . '<br>';
-		echo 'Refresh token: ' . $obj->getRefreshToken() . '<br>';
-		echo 'Company ID: ' . get_option('spm_fic_company_id');
+		
+		// Maschera i token per sicurezza
+		$access_token = $obj->getAccessToken();
+		$refresh_token = $obj->getRefreshToken();
+		$masked_access = substr($access_token, 0, 8) . str_repeat('•', max(0, strlen($access_token) - 12)) . substr($access_token, -4);
+		$masked_refresh = substr($refresh_token, 0, 8) . str_repeat('•', max(0, strlen($refresh_token) - 12)) . substr($refresh_token, -4);
+		
+		echo 'Access token: <code>' . esc_html($masked_access) . '</code><br>';
+		echo 'Refresh token: <code>' . esc_html($masked_refresh) . '</code><br>';
+		echo 'Company ID: ' . esc_html(get_option('spm_fic_company_id'));
 	} else {
-		echo '❌ Errore: ' . $obj->error;
+		echo '❌ Errore: ' . esc_html($obj->error);
 	}
 } catch (Exception $e) {
-	echo '❌ Eccezione: ' . $e->getMessage();
+	echo '❌ Eccezione: ' . esc_html($e->getMessage());
 }
 ?>

@@ -36,6 +36,7 @@ require_once plugin_dir_path(__FILE__) . 'acf-fields/acf-contratti.php';  // NUO
 // ==========================================================
 require_once plugin_dir_path(__FILE__) . 'includes/class-date-helper.php';  // NUOVO
 require_once plugin_dir_path(__FILE__) . 'includes/class-contract-handler.php';  // NUOVO
+require_once plugin_dir_path(__FILE__) . 'includes/class-rate-limiter.php';  // Rate limiting
 require_once plugin_dir_path(__FILE__) . 'includes/spm-list-inline-actions.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-statistics-handler.php';
     require_once plugin_dir_path(__FILE__) . 'includes/class-about-page.php';
@@ -126,6 +127,18 @@ add_action('spm_sync_clienti_cron', function () {
 // Debug sync manuale (solo admin, via querystring)
 add_action('admin_init', function () {
     if (isset($_GET['spm_test_sync']) && current_user_can('manage_options')) {
+        // Verifica nonce per prevenire CSRF
+        if (!wp_verify_nonce($_GET['_wpnonce'] ?? '', 'spm_manual_sync')) {
+            wp_die('Nonce non valido. <a href="' . esc_url(wp_nonce_url(admin_url('admin.php?spm_test_sync=1'), 'spm_manual_sync')) . '">Riprova</a>');
+        }
+        
+        // Rate limiting: max 3 sync manuali per ora
+        $limiter = SPM_Rate_Limiter::instance();
+        if (!$limiter->can_proceed('manual_sync', 3, 3600)) {
+            $info = $limiter->get_limit_info('manual_sync');
+            wp_die('⏳ ' . esc_html($limiter->get_limit_message('manual_sync', $info)));
+        }
+        
         sync_clienti_da_fic(true);
         exit;
     }
@@ -141,6 +154,18 @@ add_action('admin_init', function () {
     // ?spm_backfill=contract&cid=123
     // ?spm_backfill=range&from=2024-01&to=2025-08
     if (!isset($_GET['spm_backfill'])) return;
+
+    // Verifica nonce per prevenire CSRF
+    if (!wp_verify_nonce($_GET['_wpnonce'] ?? '', 'spm_backfill_ops')) {
+        wp_die('Nonce non valido. Aggiungi &_wpnonce=' . wp_create_nonce('spm_backfill_ops') . ' al link.');
+    }
+
+    // Rate limiting: max 5 backfill per ora
+    $limiter = SPM_Rate_Limiter::instance();
+    if (!$limiter->can_proceed('backfill_ops', 5, 3600)) {
+        $info = $limiter->get_limit_info('backfill_ops');
+        wp_die('⏳ ' . esc_html($limiter->get_limit_message('backfill_ops', $info)));
+    }
 
     $act = sanitize_text_field($_GET['spm_backfill']);
     $handler = SPM_Statistics_Handler::instance();
@@ -174,6 +199,18 @@ add_action('admin_init', function () {
 add_action('admin_init', function () {
     if (!current_user_can('manage_options')) return;
     if (!isset($_GET['spm_billing_backfill'])) return;
+
+    // Verifica nonce per prevenire CSRF
+    if (!wp_verify_nonce($_GET['_wpnonce'] ?? '', 'spm_billing_backfill')) {
+        wp_die('Nonce non valido. Aggiungi &_wpnonce=' . wp_create_nonce('spm_billing_backfill') . ' al link.');
+    }
+
+    // Rate limiting: max 5 billing backfill per ora
+    $limiter = SPM_Rate_Limiter::instance();
+    if (!$limiter->can_proceed('billing_backfill', 5, 3600)) {
+        $info = $limiter->get_limit_info('billing_backfill');
+        wp_die('⏳ ' . esc_html($limiter->get_limit_message('billing_backfill', $info)));
+    }
 
     $act   = sanitize_text_field($_GET['spm_billing_backfill']); // all | contract | range
     $from  = isset($_GET['from']) ? sanitize_text_field($_GET['from']) : null; // 'YYYY-MM'
